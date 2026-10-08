@@ -27,6 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var flushed = false
     var lastDownload: URL?
     var server: Process?
+    // what to note when macOS ends the page's process (see webViewWebContentProcessDidTerminate)
+    var memWatch: DispatchSourceMemoryPressure?
+    var lastPressure: String?
+    var lastStats = ""
+    let launchedAt = Date()
 
     // Resources of the downloadable app (nil when running from a source folder)
     lazy var bundledApp: String? = {
@@ -69,6 +74,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         NSApp.activate(ignoringOtherApps: true)
         if bundledApp != nil { startedServer = true; startServer() }
         web.load(URLRequest(url: startURL))
+        // log when the Mac runs low on memory: the usual reason macOS ends a window's page process
+        let mw = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        mw.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let level = mw.data.contains(.critical) ? "critical" : "warning"
+            self.lastPressure = level + " at " + ISO8601DateFormatter().string(from: Date())
+            self.logEvent("Mac memory pressure: " + level)
+        }
+        mw.resume()
+        memWatch = mw
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -167,6 +182,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             flushed = true
             NSApp.terminate(nil)
         }
+        if let st = d["stats"] as? String { lastStats = st }                 // page size snapshot, sent every few minutes
+        if let err = d["jsError"] as? String { logEvent("page error: " + String(err.prefix(400))) }
         if let prompt = d["pickFolder"] as? String {
             let panel = NSOpenPanel()
             panel.canChooseDirectories = true
@@ -231,8 +248,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     // If macOS kills the page's process (e.g. low memory), bring the page back; the session autosaves continuously.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        logEvent("page process ended (macOS reclaimed memory or it crashed) - reloading; the app reopens your session")
-        webView.load(URLRequest(url: startURL))
+        let mins = Int(Date().timeIntervalSince(launchedAt) / 60)
+        let visible = window.occlusionState.contains(.visible)
+        let app: String = NSApp.isActive ? "active" : "in background"
+        let win: String = visible ? "visible" : "hidden"
+        let pressure: String = lastPressure ?? "none"
+        let page: String = lastStats.isEmpty ? "?" : lastStats
+        logEvent("page process ended - reloading; the app reopens your session. app \(app), window \(win), running \(mins) min, last memory pressure: \(pressure), page: \(page)")
+        var c = URLComponents(url: startURL, resolvingAgainstBaseURL: false)
+        c?.queryItems = [URLQueryItem(name: "recovered", value: "1")]
+        webView.load(URLRequest(url: c?.url ?? startURL))
     }
 
     func startServer() {

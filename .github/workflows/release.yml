@@ -19,14 +19,14 @@ jobs:
       matrix:
         arch: [arm64, x86_64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build CodeCoach.app + .dmg
         env:
           ARCH: ${{ matrix.arch }}
           REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash packaging/macos/build.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.arch }}
           path: dist/*.dmg
@@ -45,8 +45,8 @@ jobs:
     name: Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Inno Setup 6.3+ (installer builder)
@@ -55,7 +55,7 @@ jobs:
       - name: Build CodeCoach.exe, zip and installer
         shell: pwsh
         run: ./packaging/windows/build.ps1 -Repo "${{ github.repository }}" -Version "${{ env.VERSION }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
@@ -70,14 +70,14 @@ jobs:
 
   linux:
     name: Linux
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build tarball
         env:
           REPO: ${{ github.repository }}
         run: bash packaging/linux/build.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: dist/CodeCoach-Linux.tar.gz
@@ -90,13 +90,13 @@ jobs:
     name: Publish release
     if: github.ref_type == 'tag'
     needs: [macos, windows, linux]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: out
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: out/*
           generate_release_notes: true

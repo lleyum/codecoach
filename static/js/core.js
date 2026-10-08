@@ -322,6 +322,21 @@
   }
 
   // ------------------------------------------------------------------ init
+  // ------------------------------------------------------------------ diagnostics for the Mac window's log (~/.codecoach/window.log)
+  // If macOS ends the page's process, the log then says how big the page was and whether the Mac was short on memory.
+  const nativeLog = (msg) => { try { if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.cc) window.webkit.messageHandlers.cc.postMessage(msg); } catch (e) { /* not the Mac app */ } };
+  const startedAt = Date.now();
+  function pageStats() {
+    let sessKB = 0;
+    try { if (S.session) sessKB = Math.round(JSON.stringify(S.session).length / 1024); } catch (e) { /* ignore */ }
+    const chat = document.getElementById("chat");
+    return "view " + (S.view || "?") + ", " + document.getElementsByTagName("*").length + " page elements, " + (chat ? chat.children.length : 0) + " chat items, session " + sessKB + " KB, editors " +
+      (CC.editors || []).length + ", page open " + Math.round((Date.now() - startedAt) / 60000) + " min";
+  }
+  let jsErrors = 0;
+  window.addEventListener("error", (e) => { if (jsErrors++ < 20) nativeLog({ jsError: (e.message || "error") + " @ " + (e.filename || "").split("/").pop() + ":" + (e.lineno || 0) }); });
+  window.addEventListener("unhandledrejection", (e) => { if (jsErrors++ < 20) nativeLog({ jsError: "promise: " + String((e.reason && (e.reason.message || e.reason)) || "rejected").slice(0, 300) }); });
+
   CC.init = async function () {
     localizeKeys();
     CC.applyPrefs();
@@ -386,6 +401,14 @@
       CC.resumeSession(openSid, { quiet: true, reload: true }).then(() => { if (!S.session) { CC.local.set("openSession", null); goLast(); } })
         .catch(() => { CC.local.set("openSession", null); goLast(); });
     } else goLast();
+    if (window.CC_NATIVE) {
+      setInterval(() => nativeLog({ stats: pageStats() }), 3 * 60000);
+      document.addEventListener("visibilitychange", () => { if (document.hidden) nativeLog({ stats: pageStats() }); });
+    }
+    if (/[?&]recovered=1/.test(location.search)) {
+      try { history.replaceState(null, "", "/"); } catch (e) { /* ignore */ }
+      setTimeout(() => CC.toast("macOS restarted CodeCoach's page (usually to free memory). Your session, code and draft are back where you left them."), 900);
+    }
     if (!CC.local.get("guide_seen", false)) { CC.local.set("guide_seen", true); setTimeout(() => CC.toast("New: \"How to use\" in the sidebar explains everything CodeCoach does."), 1200); }
     CC.usageLine();
   };
