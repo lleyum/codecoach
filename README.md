@@ -11,7 +11,7 @@ A free study app for learning to code. An AI coach teaches you, quizzes you, dri
 
 All your notes, solutions and progress live in a plain folder on your computer, your **Library**. Everything in it is Markdown you can read or edit in any text editor, or open as an Obsidian vault.
 
-- **Sync for free** with what you already use: put the Library in iCloud Drive, Dropbox, OneDrive, Google Drive, a Git repo or Syncthing, and point CodeCoach on your other computer at the same folder. No account.
+- **Sync for free** with what you already use: put the Library in iCloud Drive, Dropbox, OneDrive, Google Drive, a Git repo or Syncthing, and point CodeCoach on your other computer at the same folder. No account. If the same session changes on two computers, CodeCoach asks which version to keep instead of overwriting one, and it recognizes sync services' conflict copies.
 - **Export everything:** Welcome → *Export everything* makes one zip of every course, solution, session and setting.
 - **Keys stay local:** AI keys live in `~/.codecoach/config.json` on each computer, never in the Library or an export. No tracking; CodeCoach talks only to the AI you pick.
 
@@ -33,6 +33,8 @@ CodeCoach works with any AI that speaks the OpenAI chat format. The choice is on
 { "ai": "openai:gpt-5-mini" }                          // also: anthropic: gemini: groq: deepseek: mistral:
 { "ai": "my-model@https://any-server.example/v1" }     // anything OpenAI-compatible, including future providers
 ```
+
+The sidebar shows what you've spent: exact amounts from OpenRouter, and estimates (marked ≈) from published prices for other cloud providers. Add your own prices in `~/.codecoach/price_overrides.json` if a model isn't listed.
 
 Keys go in Settings (`"keys": {"openrouter": "..."}`) or the usual environment variable (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, ...). To add a provider by name, add it once:
 
@@ -79,6 +81,15 @@ Or build locally: `packaging/macos/build.sh` (on a Mac), `packaging/windows/buil
 The website in `site/` deploys to GitHub Pages with `.github/workflows/pages.yml` (Settings → Pages → Source: GitHub Actions). Its download buttons find the latest release automatically.
 
 **Signed Mac builds (optional):** with an Apple Developer ID, set `MAC_SIGN_IDENTITY` and `NOTARY_PROFILE` for `packaging/macos/build.sh` and the Gatekeeper warning goes away.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v        # notes, schedule, trimming, and the real server against a mock AI
+python3 -m unittest discover -s tests/e2e -v    # a whole study session in a browser (needs Playwright)
+```
+
+No network or API key needed: `tests/mock_llm.py` is a small fake AI that speaks the OpenAI format. You can also run it by hand (`python3 tests/mock_llm.py`) and set the AI line in Settings to `mock-model@http://127.0.0.1:9911/v1`. Every push runs both on GitHub (`.github/workflows/checks.yml`).
 
 ## Energy use
 

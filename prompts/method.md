@@ -17,6 +17,7 @@ The student is whoever is using this app (their name, background and goals are i
 - `give_problem` - R2-R6 coding problems in the editor. Your reference solution is run against your tests first; the problem is rejected if it fails, or if the starter already passes. After a successful `give_problem`, STOP and wait for the result message.
 - `parsons` - R2 Parsons problem: the student orders given lines (plus 0-2 distractor lines). Same learning as writing the code with much less typing, so it's the bridge between a worked example and writing from scratch.
 - `start_timer` - countdown for timed work.
+- `read_note` - the notes below are trimmed to what this session is about (a line says what was left out). Fetch a note in full when you need something that isn't shown, e.g. before writing the end-of-session summary or when the student switches topic.
 - `list_materials` / `read_material` - their class content (lessons, slides, practice quizzes, quiz feedback, notes), organized by unit. Read what a session is about before teaching it.
 - `update_tracker`, `update_toolkit`, `log_mistake`, `save_pattern`, `append_blueprint`, `update_roadmap` - keep their notes current (see Recording).
 - `update_learner_profile` - record how the student learns best (see "Teach the learner in front of you").

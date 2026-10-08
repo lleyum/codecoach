@@ -16,22 +16,35 @@
   let saveTimer = null;
   function scheduleSave(ms) { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, ms == null ? 800 : ms); }
   let saveChain = Promise.resolve();
+  // Typing in the editor: the code is copied to this computer's browser storage on every change (crash-safe), but the
+  // session file - which sync tools re-upload as a whole - is written at most every 15 s, and right away on Run,
+  // Submit, leaving the editor, hiding the window, switching sessions or quitting.
+  let codeTimer = null;
+  const backupKey = (sid, pid) => "code_" + sid + "_" + pid;
+  function codeChanged(p) {
+    CC.local.set(backupKey(S.session.id, p.id), { code: p.code, t: Date.now() });
+    if (!codeTimer) codeTimer = setTimeout(() => { codeTimer = null; saveNow(); }, 15000);
+  }
+  function saveCodeSoon() { if (codeTimer) saveNow(); }
   function saveNow() {            // saves run one after another, so an older snapshot can never overwrite a newer one
-    clearTimeout(saveTimer);
+    clearTimeout(saveTimer); clearTimeout(codeTimer); codeTimer = null;
     const sess = S.session;
     if (!sess) return saveChain;
     saveChain = saveChain.then(async () => {
+      if (sess.conflict) return;                // changed on another computer: wait for the student's choice
       const r = await CC.api("/api/session/save", sess);
+      if (r.conflict) { sess.conflict = r.conflict; if (S.session === sess) showSyncBanner(); return; }
       if (r.error) CC.toast("Couldn't save the session: " + r.error, true);
+      else if (r.rev) sess.rev = r.rev;
     }).catch(() => {});
     return saveChain;
   }
   CC.flushSave = function () {
-    if (!S.session) return;
+    if (!S.session || S.session.conflict) return;
     pauseClocks(true);
     const s = S.session;
     // browsers cap "while closing" requests at 64 KB, so send only what changes second to second
-    const body = JSON.stringify({ id: s.id, paused: s.paused, timer: s.timer || null,
+    const body = JSON.stringify({ id: s.id, rev: s.rev || 0, paused: s.paused, timer: s.timer || null,
       problems: s.problems.map((p) => ({ id: p.id, code: p.code, activeMs: p.activeMs, runningSince: p.runningSince, status: p.status, solvedIn: p.solvedIn, runs: p.runs, hints: p.hints })) });
     try {
       fetch("/api/session/patch", { method: "POST", keepalive: body.length < 60000, headers: { "X-CC-Token": window.CC_TOKEN, "Content-Type": "application/json" }, body }).catch(() => {});
@@ -43,6 +56,7 @@
     if (S.busy || S.pending) { CC.toast("Finish the current step first (or press Stop), then switch sessions.", true); return false; }
     pauseClocks(true);
     await saveNow();
+    (S.session.problems || []).forEach((p) => { try { localStorage.removeItem("cc_" + backupKey(S.session.id, p.id)); } catch (e) { /* ignore */ } });
     S.session = null; S.queue = [];
     CC.local.set("openSession", null);
     const b = $("studyBadge"); if (b) b.classList.add("hidden");
@@ -159,7 +173,7 @@
     sessions.slice(0, 14).forEach((s) => {
       const row = h("div", { class: "sess-row", onclick: () => resumeSession(s.id) },
         h("div", { class: "t" }, h("b", { text: s.title || "Session" }),
-          h("span", { class: "tiny muted", text: (MODES[s.mode] ? MODES[s.mode].label : s.mode) + " · " + CC.fmtTime(s.updated) + (s.problems ? " · " + s.solved + "/" + s.problems + " solved" : "") })),
+          h("span", { class: "tiny muted", text: (MODES[s.mode] ? MODES[s.mode].label : s.mode) + " · " + CC.fmtTime(s.updated) + (s.problems ? " · " + s.solved + "/" + s.problems + " solved" : "") + (s.versions ? " · " + (s.versions + 1) + " versions" : "") })),
         h("div", { class: "acts" },
           h("button", { class: "btn icon ghost sm", title: "Rename", html: CC.icon("edit"), onclick: async (e) => {
             e.stopPropagation();
@@ -201,6 +215,7 @@
     v.appendChild(h("div", { class: "pause-banner hidden", id: "pauseBanner" }, h("span", { html: CC.icon("pause") }),
       h("span", { id: "pauseText", text: "Paused - timers are stopped." }), h("span", { class: "spacer" }),
       h("button", { class: "btn sm primary", html: CC.icon("play") + "<span>Resume</span>", onclick: () => { resumeClocks(); CC.sfx && CC.sfx.play("toggle"); } })));
+    v.appendChild(h("div", { class: "pause-banner sync-banner hidden", id: "syncBanner" }));
 
     chat = h("div", { class: "chat", id: "chat", "data-sid": s.id });
     const input = h("textarea", { id: "input", rows: 1, placeholder: "Message " + CC.coachName() + "...   Enter to send · Shift+Enter for a new line" });
@@ -237,7 +252,8 @@
     editor = CC.makeEditor(edHost, s.course.language, { run: runCurrent, submit: submitCurrent });
     if (editor.cm) editor.cm.on("change", (c, ch) => { if (ch.origin !== "setValue" && S.session && S.session.paused) resumeClocks(); });
     else editor.onChange(() => { if (S.session && S.session.paused) resumeClocks(); });
-    editor.onChange(() => { const p = curProblem(); if (p && p.status === "open") { p.code = editor.get(); scheduleSave(1500); } });
+    editor.onChange(() => { const p = curProblem(); if (p && p.status === "open") { p.code = editor.get(); codeChanged(p); } });
+    if (editor.cm) editor.cm.on("blur", saveCodeSoon);
 
     // wiring
     const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(240, input.scrollHeight) + "px"; };
@@ -275,7 +291,29 @@
     const savedSplit = CC.local.get("split", null);
     if (savedSplit) chatcol.style.flex = savedSplit;
 
-    s.display.forEach((it) => { const n = renderItem(it); if (n) chat.appendChild(n); });
+    // long sessions: draw only the newest messages (faster to open, lighter on memory); older ones load on request
+    const SHOW = 150;
+    const drawFrom = (start, before) => {
+      const frag = document.createDocumentFragment();
+      s.display.slice(start, before).forEach((it) => { const n = renderItem(it); if (n) frag.appendChild(n); });
+      return frag;
+    };
+    let first = Math.max(0, s.display.length - SHOW);
+    chat.appendChild(drawFrom(first, s.display.length));
+    if (first > 0) {
+      const more = h("button", { class: "btn sm ghost show-earlier" });
+      const label = () => { more.textContent = "Show earlier messages (" + first + " more)"; };
+      label();
+      more.onclick = () => {
+        const prevH = chat.scrollHeight, start = Math.max(0, first - SHOW);
+        more.after(drawFrom(start, first));
+        first = start;
+        if (first === 0) more.remove(); else label();
+        chat.scrollTop += chat.scrollHeight - prevH;                 // keep the view where it was
+        MD.enhance && MD.enhance(chat);
+      };
+      chat.insertBefore(more, chat.firstChild);
+    }
     renderProblemTabs();
     const open = s.problems.filter((p) => p.status === "open");
     if (s.problems.length) selectProblem((open[open.length - 1] || s.problems[s.problems.length - 1]).id);
@@ -295,7 +333,14 @@
 
   function updateCost() {
     const c = $("costChip");
-    if (c && S.session) c.textContent = "$" + (S.session.usage.cost || 0).toFixed(3) + " · " + Math.round((S.session.usage.tokens || 0) / 1000) + "k tok";
+    if (c && S.session) {
+      const us = S.session.usage;
+      c.textContent = (us.estimated ? "≈$" : "$") + (us.cost || 0).toFixed(3) + " · " + Math.round((us.tokens || 0) / 1000) + "k tok";
+      const ps = S.session.promptStats;
+      c.title = [us.estimated ? "Cost estimated from published prices (your provider's bill is exact)" : "",us.prompt ? Math.round(100 * (us.cached || 0) / us.prompt) + "% of this session's input came from the provider's cache (cheaper and faster)" : "",
+        ps ? "Instructions + your notes: " + Math.round(ps.total / 1000) + "k characters" + (ps.total_untrimmed > ps.total ? " (trimmed from " + Math.round(ps.total_untrimmed / 1000) + "k to what this session needs)" : "") : ""]
+        .filter(Boolean).join("\n");
+    }
   }
 
   // ================================================================== chat items
@@ -583,6 +628,8 @@
       parameters: { type: "object", properties: { minutes: { type: "number" }, label: { type: "string" } }, required: ["minutes"] } } },
     { type: "function", function: { name: "list_materials", description: "List the student's course materials (units, titles, types, paths).", parameters: { type: "object", properties: {} } } },
     { type: "function", function: { name: "read_material", description: "Read one course material by path.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+    { type: "function", function: { name: "read_note", description: "Read one of the student's notes in full. The notes in your instructions are trimmed to what this session is about; use this when you need a row or section that was left out (e.g. a mastered topic, a solid toolkit row, another blueprint section).",
+      parameters: { type: "object", properties: { note: { type: "string", enum: ["tracker", "toolkit", "mistakes", "patterns", "blueprint", "roadmap", "profile", "learner"] } }, required: ["note"] } } },
     { type: "function", function: { name: "update_tracker", description: "Create/update a topic row in the Mastery Tracker.",
       parameters: { type: "object", properties: { topic: { type: "string" }, level: { type: "string", description: "R0-R6 or ?" }, mastered: { type: "string", description: "yes/no" },
         review_outcome: { type: "string", enum: ["pass", "hard", "fail"], description: "For mastered topics / reviews: the app computes the next review date (expanding gaps: 2, 5, 12, 30, 75... days; hard = same gap; fail = now). Prefer this over next_review." },
@@ -719,6 +766,12 @@
       addItem({ kind: "sys", icon: "brain", text: "Learner profile · " + a.section + " updated" });
       return { ok: true };
     },
+    async read_note(a) {
+      const r = await CC.api("/api/note/read", { folder: S.session.course.folder, note: a.note });
+      if (r.error) return { error: r.error };
+      addItem({ kind: "sys", icon: "book", text: CC.coachName() + " read your " + (r.note || a.note) }, { save: false });
+      return { note: r.note || a.note, text: r.text };
+    },
     async parsons(a) {
       if (!Array.isArray(a.lines) || a.lines.length < 2) return { error: "parsons needs at least 2 lines" };
       const it = { kind: "parsons", prompt: a.prompt, lines: a.lines, distractors: a.distractors || [] };
@@ -796,6 +849,7 @@
     const sp = await CC.api("/api/system_prompt?" + CC.q({ folder: S.session.course.folder, mode: S.session.mode, topic: S.session.topic || "" }));
     if (sp.error) { addItem({ kind: "err", text: sp.error, retry: true }, { save: false }); return false; }
     S.sys = sp.prompt; S.sysFor = S.session.id;
+    if (sp.stats) { S.session.promptStats = sp.stats; updateCost(); }
     return true;
   }
 
@@ -826,7 +880,11 @@
         if (res.error) { if (bubble) bubble.closest('.msg').remove(); addItem({ kind: "err", text: res.error, retry: true }, { save: false }); break; }
         const u = res.usage || {};
         S.session.usage.cost += Number(u.cost || 0);
+        if (u.cost_estimated) S.session.usage.estimated = true;
         S.session.usage.tokens += Number(u.prompt_tokens || 0) + Number(u.completion_tokens || 0);
+        const det = u.prompt_tokens_details || {};
+        S.session.usage.prompt = (S.session.usage.prompt || 0) + Number(u.prompt_tokens || 0);
+        S.session.usage.cached = (S.session.usage.cached || 0) + Number(det.cached_tokens || u.prompt_cache_hit_tokens || 0);
         S.session.lastPrompt = Number(u.prompt_tokens || 0);
         updateCost();
         const m = res.message;
@@ -1012,6 +1070,9 @@
     if (c && (!S.course || S.course.folder !== c.folder)) { S.course = c; CC.$("courseSelect").value = c.folder; CC.local.set("course", c.folder); }
     const upd = Math.min(Date.now(), Date.parse(s.updated || "") || Date.now());
     s.problems.forEach((p) => {
+      // the app stopped before its last save (e.g. force-quit while typing): keep the newer code from this computer
+      const b = CC.local.get(backupKey(s.id, p.id), null);
+      if (b && p.status === "open" && typeof b.code === "string" && b.code !== p.code && b.t > (Date.parse(s.updated || "") || 0) + 500) p.code = b.code;
       migrateClock(p);
       if (p.runningSince) { p.activeMs += Math.max(0, upd - p.runningSince); p.runningSince = null; }   // stop at the last save
     });
@@ -1021,6 +1082,7 @@
     if (!sessionShown()) renderSession();
     if (opts.reload && s.userPaused) { S.pauseText = "Still paused, like before the page reloaded. Press Resume (or type / run code) to continue."; updatePauseUI(); }
     else resumeClocks();                   // ...then continues exactly where it stopped
+    if ((s.versions || []).length) showSyncBanner();
     addItem({ kind: "sys", icon: "refresh", text: opts.reload ? "Page reloaded - you're right where you were (code, chat and timers kept)" : "Resumed - your notes, progress and timers are as you left them" }, { save: false });
     const pending = toolGaps();
     const last = s.messages[s.messages.length - 1];
@@ -1038,6 +1100,91 @@
     }
   }
   CC.resumeSession = resumeSession;
+
+  // ================================================================== sync: the same session on two computers
+  // Every save carries the revision it was based on. If another computer saved a newer one in between (the Library
+  // synced it here), the server refuses, and the student chooses instead of one version silently overwriting the other.
+  // Sync services that can't merge leave "conflict copies"; those are offered here too.
+  function when(iso) { return iso ? CC.fmtTime(iso) : "recently"; }
+  async function reopen(id) {               // load the saved file again without saving this copy over it
+    (S.session.problems || []).forEach((p) => { try { localStorage.removeItem("cc_" + backupKey(S.session.id, p.id)); } catch (e) { /* ignore */ } });
+    pauseClocks(true); S.session = null; S.queue = [];
+    if (chat) chat.dataset.sid = "";        // rebuild the chat and workspace from the loaded version
+    await resumeSession(id, { quiet: true });
+  }
+  function showSyncBanner() {
+    const s = S.session, ban = $("syncBanner");
+    if (!s || !ban) return;
+    ban.innerHTML = "";
+    const btn = (label, fn, cls) => h("button", { class: "btn sm " + (cls || ""), text: label, onclick: fn });
+    if (s.conflict) {
+      pauseClocks(true);
+      ban.append(h("span", { html: CC.icon("refresh") }),
+        h("span", { text: "This session was changed on another computer (" + s.conflict.device_name + ", " + when(s.conflict.updated) + ")." }),
+        h("span", { class: "spacer" }),
+        btn("Load that version", () => reopen(s.id), "primary"),
+        btn("Keep mine as a copy", async () => {
+          const old = s.id;
+          s.id = old + "-" + Math.random().toString(36).slice(2, 6);
+          s.title = (s.title || "Session") + " (" + ((S.state.device && S.state.device.name) || "this computer") + ")";
+          s.rev = 0; delete s.conflict;
+          await saveNow();
+          CC.local.set("openSession", s.id);
+          if (chat) chat.dataset.sid = s.id;
+          ban.classList.add("hidden");
+          CC.toast("Saved yours as \"" + s.title + "\". The other computer's version is still under the original name.");
+          resumeClocks();
+        }));
+    } else if ((s.versions || []).length) {
+      const n = s.versions.length;
+      ban.append(h("span", { html: CC.icon("refresh") }),
+        h("span", { text: "Your sync service kept " + (n === 1 ? "another version" : n + " other versions") + " of this session." }),
+        h("span", { class: "spacer" }),
+        btn("Compare", compareVersions),
+        btn("Use newest", async () => {
+          const newest = s.versions.slice().sort((a, b) => (b.updated || "").localeCompare(a.updated || ""))[0];
+          const useCopy = (newest.updated || "") > (s.updated || "");
+          await saveNow();
+          for (const v of s.versions) await CC.api("/api/session/resolve", { id: s.id, file: v.file, action: useCopy && v === newest ? "use" : "discard" });
+          CC.toast(useCopy ? "Switched to the newest version. The others are in CodeCoach/trash." : "This is the newest version. The others are in CodeCoach/trash.");
+          reopen(s.id);
+        }, "primary"),
+        btn("Keep both", async () => {
+          for (const v of s.versions) await CC.api("/api/session/resolve", { id: s.id, file: v.file, action: "keep_both" });
+          CC.toast("Each version is now its own session in the list.");
+          s.versions = []; ban.classList.add("hidden");
+        }));
+    } else { ban.classList.add("hidden"); return; }
+    ban.classList.remove("hidden");
+  }
+  function compareVersions() {
+    const s = S.session;
+    const row = (label, v, act) => h("div", { class: "item" },
+      h("span", { class: "t" }, h("b", { text: label }), h("span", { class: "tiny muted", text: " · " + when(v.updated) + (v.device_name ? " · " + v.device_name : "") })),
+      h("span", { class: "tiny muted", text: v.messages + " messages · " + v.solved + "/" + v.problems + " solved" }),
+      act ? h("button", { class: "btn sm", text: "Use this one", onclick: act }) : h("span", { class: "chip", text: "open now" }));
+    const solved = (s.problems || []).filter((p) => p.status === "solved").length;
+    const list = h("div", { class: "list" }, row("This version", { updated: s.updated, device_name: s.device_name, messages: (s.messages || []).length, solved, problems: (s.problems || []).length }));
+    s.versions.forEach((v, i) => list.appendChild(row("Other version " + (i + 1), v, async () => {
+      CC.closeModal();
+      await CC.api("/api/session/resolve", { id: s.id, file: v.file, action: "use" });
+      CC.toast("Switched versions. The one you had open is in CodeCoach/trash.");
+      reopen(s.id);
+    })));
+    CC.modal("Versions of this session", h("div", {}, h("p", { class: "muted small", text: "Each computer that edited this session at the same time left its own copy. Pick the one to keep - the others go to CodeCoach/trash, nothing is deleted." }), list),
+      [h("button", { class: "btn ghost", text: "Close", onclick: CC.closeModal })], { wide: true });
+  }
+  async function checkRemoteChange() {     // when the window comes back: did another computer save this session meanwhile?
+    const s = S.session;
+    if (!s || s.conflict || S.busy) return;
+    const r = await CC.api("/api/session/rev?" + CC.q({ id: s.id }));
+    const me = S.state.device && S.state.device.id;
+    if (S.session === s && r.rev > (s.rev || 0) && r.device && r.device !== me) {
+      s.conflict = { rev: r.rev, device_name: r.device_name || "another computer", updated: r.updated };
+      showSyncBanner();
+    }
+  }
+  window.addEventListener("focus", () => { checkRemoteChange(); });
 
   // ================================================================== workspace / problems
   function showWorkspace() {
@@ -1131,6 +1278,7 @@
     const p = curProblem(); if (!p) return null;
     resumeClocks();
     p.code = editor.get();
+    saveCodeSoon();
     const rb = $("runBtn"); rb.disabled = true;
     const o = $("pOutput"); o.classList.remove("hidden"); o.innerHTML = '<div class="out-head"><span class="dots"><span></span><span></span><span></span></span><span class="muted small">Running tests...</span></div>';
     const r = await CC.api("/api/run_tests", { language: L(), code: p.code, tests: p.tests });
@@ -1193,8 +1341,8 @@
   // stepping away for more than 5 minutes without pausing: that time doesn't count either
   let hiddenAt = null;
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { hiddenAt = Date.now(); return; }
-    if (S.session) tickClock();
+    if (document.hidden) { hiddenAt = Date.now(); saveCodeSoon(); return; }
+    if (S.session) { tickClock(); checkRemoteChange(); }
     const s = S.session, gap = hiddenAt ? Date.now() - hiddenAt : 0; hiddenAt = null;
     if (!s || s.paused || gap < 5 * 60000) return;
     s.problems.forEach((p) => { if (p.runningSince) p.runningSince += gap; });

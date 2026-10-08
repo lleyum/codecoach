@@ -257,7 +257,8 @@
     ["thinkingmachines/inkling:free", "Inkling (free)"],
     ["qwen/qwen3.8-27b:free", "Qwen 3.8 27B (free)"],
   ];
-  CC.MODELS = MODELS;
+  // the sidebar list comes from OpenRouter's live model list (newest of each family, refreshed daily); this is only the fallback
+  Object.defineProperty(CC, "MODELS", { get: () => ((S.state && S.state.suggested_models) || []).length ? S.state.suggested_models : MODELS });
   // sidebar AI switcher: recent AI lines (any provider) + curated OpenRouter models
   CC.rememberAI = function (line) {
     if (!line) return;
@@ -270,8 +271,8 @@
     const lines = [];
     const add = (l) => { if (l && !lines.includes(l)) lines.push(l); };
     add(cur); (CC.local.get("ai_recent", []) || []).forEach(add);
-    if (ai.id === "openrouter") MODELS.forEach((m) => add("openrouter:" + m[0]));
-    const nice = (l) => { const m = MODELS.find((x) => "openrouter:" + x[0] === l); return m ? m[1] : CC.aiLabel ? CC.aiLabel(l) : l; };
+    if (ai.id === "openrouter") CC.MODELS.forEach((m) => add("openrouter:" + m[0]));
+    const nice = (l) => { const m = CC.MODELS.find((x) => "openrouter:" + x[0] === l); return m ? m[1] : CC.aiLabel ? CC.aiLabel(l) : l; };
     lines.forEach((l) => sel.appendChild(h("option", { value: l, text: nice(l) })));
     sel.appendChild(h("option", { value: "__settings", text: "Other model or provider..." }));
     sel.value = cur;
@@ -280,10 +281,22 @@
   CC.usageLine = async function () {
     if (!S.course) return;
     const ai = S.state.ai || {};
-    if (ai.local) { CC.$("usageLine").textContent = "local AI · free · private"; return; }
-    if (ai.id !== "openrouter") { CC.$("usageLine").textContent = ai.label + " · billed by " + ai.label; return; }
+    if (ai.local) { CC.$("usageLine").textContent = "local AI · free · private"; CC.$("usageLine").title = ""; return; }
     const d = await CC.api("/api/dashboard?" + CC.q({ folder: S.course.folder }));
-    if (!d.error) CC.$("usageLine").textContent = "$" + (d.today_cost || 0).toFixed(3) + " today  ·  $" + (d.week_cost || 0).toFixed((d.week_cost || 0) < 1 ? 3 : 2) + " this week";
+    if (!d.error) {
+      const el = CC.$("usageLine"), est = d.estimated || ai.id !== "openrouter", $ = est ? "≈$" : "$";
+      if (est && !d.week_cost && d.unpriced) {
+        el.textContent = ai.label + " · price unknown";
+        el.title = "CodeCoach couldn't find this model's price, so it can't estimate the cost. Your " + ai.label + " account shows the exact amount.\n" +
+          "To add the price yourself, see the guide: Costs.";
+        return;
+      }
+      el.textContent = $ + (d.today_cost || 0).toFixed(3) + " today  ·  " + $ + (d.week_cost || 0).toFixed((d.week_cost || 0) < 1 ? 3 : 2) + " this week";
+      const upd = d.prices_updated ? " (prices updated " + (d.prices_updated === new Date().toISOString().slice(0, 10) ? "today" : d.prices_updated) + ")" : "";
+      el.title = [est ? "Estimated from published prices" + upd + ". Your " + ai.label + " account shows the exact amount." : "",
+        d.today_prompt ? Math.round(100 * (d.today_cached || 0) / d.today_prompt) + "% of today's input came from the provider's cache" +
+          (d.week_saved ? " · caching saved $" + d.week_saved.toFixed(3) + " this week" : "") : ""].filter(Boolean).join("\n");
+    }
   };
   CC.fileManager = () => (/Mac/i.test(navigator.platform) ? "Finder" : /Win/i.test(navigator.platform) ? "Explorer" : "file manager");
   // native folder chooser: the Mac app window answers directly; otherwise the server opens the system dialog
@@ -336,6 +349,30 @@
   let jsErrors = 0;
   window.addEventListener("error", (e) => { if (jsErrors++ < 20) nativeLog({ jsError: (e.message || "error") + " @ " + (e.filename || "").split("/").pop() + ":" + (e.lineno || 0) }); });
   window.addEventListener("unhandledrejection", (e) => { if (jsErrors++ < 20) nativeLog({ jsError: "promise: " + String((e.reason && (e.reason.message || e.reason)) || "rejected").slice(0, 300) }); });
+
+  // ------------------------------------------------------------------ update check (at most once a day; Settings > App turns it off)
+  let laterThisLaunch = false;
+  CC.checkUpdate = async function (manual) {
+    const u = await CC.api("/api/update" + (manual ? "?force=1" : ""));
+    const chip = CC.$("updateChip");
+    if (u.error || !chip) { if (manual) CC.toast("Couldn't check for updates right now.", true); return; }
+    if (u.available && !laterThisLaunch) {
+      chip.innerHTML = CC.icon("download") + "<span>Update available: " + MD.esc(u.latest) + "</span>";
+      chip.classList.remove("hidden");
+      chip.onclick = () => showUpdate(u);
+    } else chip.classList.add("hidden");
+    if (manual) CC.toast(u.available ? "CodeCoach " + u.latest + " is available." : u.latest ? "You're up to date (" + u.current + ")." : "Couldn't reach GitHub - try again later.");
+  };
+  function showUpdate(u) {
+    const notes = MD.into(h("div", { class: "md update-notes" }), u.notes || "See the release page for what's new.");
+    CC.modal("CodeCoach " + u.latest, h("div", { class: "stack" },
+      h("p", { style: { margin: 0 }, text: "You have " + u.current + ". Download the new version, then replace CodeCoach in your Applications folder (or run the new installer). Your Library and settings stay as they are." }),
+      notes),
+      [h("button", { class: "btn ghost", text: "Skip this version", onclick: async () => { await CC.api("/api/update/skip", { version: u.latest }); CC.$("updateChip").classList.add("hidden"); CC.closeModal(); CC.toast("You won't be reminded about " + u.latest + "."); } }),
+       h("button", { class: "btn ghost", text: "Later", onclick: () => { laterThisLaunch = true; CC.$("updateChip").classList.add("hidden"); CC.closeModal(); } }),
+       h("span", { class: "spacer" }),
+       h("a", { class: "btn primary", href: u.url, target: "_blank", rel: "noopener", html: CC.icon("download") + "<span>Download</span>" })]);
+  }
 
   CC.init = async function () {
     localizeKeys();
@@ -401,6 +438,7 @@
       CC.resumeSession(openSid, { quiet: true, reload: true }).then(() => { if (!S.session) { CC.local.set("openSession", null); goLast(); } })
         .catch(() => { CC.local.set("openSession", null); goLast(); });
     } else goLast();
+    setTimeout(() => CC.checkUpdate(false), 4000);
     if (window.CC_NATIVE) {
       setInterval(() => nativeLog({ stats: pageStats() }), 3 * 60000);
       document.addEventListener("visibilitychange", () => { if (document.hidden) nativeLog({ stats: pageStats() }); });

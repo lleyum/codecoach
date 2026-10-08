@@ -1,4 +1,4 @@
-# Quick checks on every push: the server compiles on old and new Python, the JavaScript parses.
+# On every push: the server compiles on old and new Python, the JavaScript parses, the tests pass.
 name: Checks
 on: [push, pull_request]
 jobs:
@@ -12,6 +12,26 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m py_compile server.py packaging/fetch_vendor.py packaging/stage.py packaging/smoke_test.py
+      - run: python -m py_compile server.py packaging/fetch_vendor.py packaging/stage.py packaging/smoke_test.py tests/*.py tests/e2e/*.py
       - run: for f in static/js/*.js; do node --check "$f"; done
       - run: bash -n launch.sh && bash -n packaging/macos/build.sh && bash -n packaging/linux/build.sh
+      - name: Unit and server tests (with a mock AI, no network)
+        run: python -m unittest discover -s tests -v
+
+  e2e:
+    # A real browser runs a study session against the mock AI: problem appears, student submits, coach gets the result.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+      - run: python packaging/fetch_vendor.py
+      - run: E2E_SHOTS=$PWD python -m unittest discover -s tests/e2e -v
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-failure
+          path: e2e-failure.png
+          if-no-files-found: ignore

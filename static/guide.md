@@ -216,7 +216,7 @@ Switch courses with the picker at the top-left. Each course has its own notes; t
 
 Paste a line into Settings, pick from the lists there, or edit `~/.codecoach/config.json` (`"ai": "..."`). Keys go in Settings (or an environment variable like `OPENROUTER_API_KEY`) and stay on this computer only. A provider that doesn't exist yet needs no update: use the `model@url` form, or add it once under `"providers"` in config.json. The sidebar switcher remembers the AIs you've used, so swapping between, say, a cloud model and a local one is one click.
 
-- **Cloud (e.g. OpenRouter):** best quality. Pay per use - a heavy study day has cost about $0.04, roughly $1-2 a month. The sidebar shows today's and this week's cost for OpenRouter.
+- **Cloud (e.g. OpenRouter):** best quality. Pay per use - a heavy study day has cost about $0.04, roughly $1-2 a month. The sidebar shows today's and this week's cost (see *Costs* below).
 - **Local (Ollama / LM Studio):** free, private, works offline - but slower and a weaker teacher. Good for drills, reviews and offline study.
 
 **Setting up local (one time):**
@@ -225,9 +225,22 @@ Paste a line into Settings, pick from the lists there, or edit `~/.codecoach/con
 3. In Ollama's settings set **Context length to 32k** (CodeCoach's instructions are long).
 4. CodeCoach: Settings → AI & coach → Provider **Ollama** → **Find models** → pick it → Save. Also set "Summarize long sessions after" to about 20000.
 
-On an Intel Arc graphics card (your desktop): update the Arc driver first. If Ollama doesn't use the graphics card (Task Manager → GPU stays near 0%), use LM Studio with its Vulkan option and server address `http://localhost:1234/v1`.
+On an Intel Arc graphics card: update the Arc driver first. If Ollama doesn't use the graphics card (Task Manager → GPU stays near 0%), use LM Studio with its Vulkan option and server address `http://localhost:1234/v1`.
 
 *Suggested:* cloud for learning new topics (a misconception costs more than a few cents), local as a free backup.
+
+### Costs
+
+- **OpenRouter** tells CodeCoach the exact cost of every reply, so the sidebar and the session chip show real amounts.
+- **OpenAI, Anthropic, Gemini, DeepSeek, Mistral and others** only report how many tokens were used. CodeCoach multiplies them by published prices (OpenRouter's public price list, refreshed once a day, no account needed) and shows the result with **≈**. Hover it to see when prices were last updated. Your provider's own bill is always the exact amount.
+- **Local models** cost nothing and show "free".
+- **Price unknown?** If a model isn't on the public list, add its price (US dollars per million tokens) to `~/.codecoach/price_overrides.json`:
+
+```json
+{ "openai:gpt-6-luna": { "input": 1.25, "output": 10, "cached": 0.125 } }
+```
+
+The key is the same one line you use for the AI. `cached` is the price for input the provider served from its cache (leave it out if you don't know it).
 
 ## Themes and look
 
@@ -258,9 +271,12 @@ Optional sounds, all generated inside the app (no audio files), tuned to stay su
 - **Everything saves automatically**: chat, code, problems, timers, notes.
 - **What's inside:** each course is a folder (`_course.md`, Roadmap, Mastery Tracker, Toolkit, Mistakes, Patterns, `materials/`, `practice/` with every solution you wrote, `sessions/` with a readable log of every session). `CodeCoach/` holds saved sessions (for resuming), snippets, usage and your Learner Profile.
 - **Plain Markdown:** open or edit any of it in TextEdit, Notepad, VS Code - or open the Library as an Obsidian vault. CodeCoach handles hand-edited notes.
-- **Sync for free:** put the Library in iCloud Drive, Dropbox, OneDrive or Google Drive, or track it with Git or Syncthing. Install CodeCoach on the other computer and choose the same folder (Settings → Library & sync). Don't keep the same session open on two computers at once - the last save wins.
+- **Sync for free:** put the Library in iCloud Drive, Dropbox, OneDrive or Google Drive, or track it with Git or Syncthing. Install CodeCoach on the other computer and choose the same folder (Settings → Library & sync). If the same session was changed on two computers, nothing is overwritten silently:
+  - **Changed on another computer:** when you come back to the window (or CodeCoach tries to save) and the other computer saved a newer version, a bar asks: **Load that version**, or **Keep mine as a copy** (yours becomes its own session).
+  - **Conflict copies:** when a sync service can't merge two edits it keeps both files ("conflicted copy", "name 2", "-LAPTOP", "sync-conflict"). CodeCoach shows these as one session with "2 versions" and asks once you open it: **Compare**, **Use newest**, or **Keep both**. Replaced versions go to `CodeCoach/trash`, never deleted.
 - **Per computer only:** API keys, which AI, Library location, theme and look, Playground drafts. Keys are never stored in the Library or in exports.
 - **Export everything:** Welcome (or Settings → Library & sync) → **Export everything** makes one zip of every course, solution, session and setting (minus keys), with a note on how to restore it.
+- **Updates:** once a day CodeCoach asks GitHub whether a newer version exists (nothing about you is sent). If there is one, an **Update available** button appears at the bottom of the sidebar with what's new and a Download link; installing it never touches your Library. **Skip this version**, **Later**, or turn checking off in Settings → App.
 - **Moving to a new computer:** sync or copy the Library (or unzip an export), install CodeCoach, choose that folder, add your AI key.
 
 ## Routines that work

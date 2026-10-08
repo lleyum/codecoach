@@ -67,7 +67,7 @@
         dueCard.appendChild(list);
         if (due.length > 1) dueCard.appendChild(h("div", { class: "row", style: { marginTop: "8px" } }, h("span", { class: "spacer" }),
           btn("Review all " + due.length, "refresh", () => CC.go("study", { fresh: true, mode: "review", topic: due.map((t) => t.topic).join(", ") }), "sm primary")));
-      } else dueCard.appendChild(h("p", { class: "muted small", text: "Nothing due. Reviews show up here 2, 5 and 12 days after you practice a topic." }));
+      } else dueCard.appendChild(h("p", { class: "muted small", text: "Nothing due. Topics come back here when their review is due, with the gap growing each time you pass (2, 5, 12, 30, 75 days...)." }));
       left.appendChild(dueCard);
 
       // Recent sessions
@@ -1106,6 +1106,7 @@
     const syncD = h("input", { type: "text", value: cfg.sync_dir || "", placeholder: "Default: <Library>/CodeCoach" });
     const teach = h("input", { type: "text", value: cfg.teach_skill_path || "", placeholder: "Optional - leave empty for the built-in method" });
     const quitMin = h("input", { type: "number", min: 0, max: 600, value: cfg.auto_quit_minutes == null ? 20 : cfg.auto_quit_minutes });
+    const updChk = h("input", { type: "checkbox" }); updChk.checked = cfg.check_updates !== false;
     const coachName = h("input", { type: "text", maxlength: 40, value: cfg.coach_name || "Coach", placeholder: "Coach" });
     const ai = aiPicker(st);
     const p = CC.prefs;
@@ -1194,6 +1195,10 @@
       ["app", "App & shortcuts", "keyboard", pane(
         h("div", { class: "grid2" }, field("Quit automatically when the window has been closed for (minutes)", quitMin, "0 = never."),
           h("div", { class: "field" }, h("label", { text: "CodeCoach " + (st.version || "") }), h("div", { class: "row" }, h("button", { class: "btn sm", html: CC.icon("help") + "<span>Open the How to use guide</span>", onclick: () => { CC.closeModal(); CC.go("guide"); } })))),
+        h("div", { class: "field" }, h("label", { text: "Updates" }),
+          h("div", { class: "row wrap" }, h("label", { class: "row small", style: { gap: "6px" } }, updChk, "Check for new versions once a day"),
+            h("button", { class: "btn sm", html: CC.icon("refresh") + "<span>Check now</span>", onclick: () => CC.checkUpdate(true) })),
+          h("div", { class: "hint", text: "Asks GitHub for the latest release. Nothing about you or your study data is sent, and nothing downloads by itself." })),
         h("div", { class: "section-title", text: "Keyboard shortcuts" }),
         h("div", { class: "shortcuts", html: [
           ["⌘ 1-5", "Today · Study · Materials · Playground · Progress"], ["⌘ ↵", "Run code"], ["⇧ ⌘ ↵", "Submit solution (Study)"], ["⌘ S", "Save snippet / note"],
@@ -1223,7 +1228,7 @@
       const problem = ai.problem();
       if (problem) { showTab("ai"); return CC.toast(problem, true); }
       const b = { vault: vault.value.trim(), sync_dir: syncD.value.trim(), teach_skill_path: teach.value.trim(),
-        ai: ai.line(), max_tokens: +maxTok.value || 8000, compact_at: +compact.value || 40000, auto_quit_minutes: +quitMin.value,
+        ai: ai.line(), max_tokens: +maxTok.value || 8000, compact_at: +compact.value || 40000, auto_quit_minutes: +quitMin.value, check_updates: updChk.checked,
         coach_name: coachName.value.trim() || "Coach" };
       if (ai.keys()) b.keys = ai.keys();
       const r = await CC.api("/api/config", b);

@@ -36,7 +36,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "3.0.1"
+VERSION = "3.1.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 VENDOR_DIR = os.path.join(STATIC_DIR, "vendor")
@@ -66,6 +66,7 @@ DEFAULT_CONFIG = {
     "api_key": "",
     "teach_skill_path": "",              # optional: your own teaching method (Markdown); empty = built-in
     "auto_quit_minutes": 20,
+    "check_updates": True,               # once a day, ask GitHub whether a newer release exists (no data about you is sent)
     "coach_name": "Coach",
     # legacy (v2) AI settings - still read, converted to "ai" automatically
     "provider": "openrouter",
@@ -98,7 +99,8 @@ def provider_table(cfg):
         if isinstance(v, dict) and v.get("url"):
             k = re.sub(r"[^\w\-]", "", k.lower())
             t[k] = {"label": v.get("label") or k, "url": v["url"], "key_env": v.get("key_env", ""),
-                    "local": bool(re.match(r"https?://(localhost|127\.0\.0\.1)", v["url"])), "key_url": v.get("key_url", "")}
+                    "local": bool(v["local"]) if "local" in v else bool(re.match(r"https?://(localhost|127\.0\.0\.1)", v["url"])),
+                    "key_url": v.get("key_url", "")}
     return t
 
 
@@ -219,7 +221,9 @@ def crashed(rc):
 
 def crash_name(rc):
     names = {0xC0000005: "access violation - bad pointer or index", 0xC00000FD: "stack overflow - infinite recursion?",
-             0xC0000094: "integer divide by zero", 11: "segmentation fault - bad pointer or index", 6: "abort", 8: "arithmetic error"}
+             0xC0000094: "integer divide by zero", 11: "segmentation fault - bad pointer or index", 6: "abort", 8: "arithmetic error",
+             24: "stopped: used too much CPU time - an infinite loop?", 25: "stopped: wrote more than 50 MB to a file",
+             9: "stopped by the app (time or memory limit)", 0xC0000017: "stopped: ran out of memory", 0xC000012D: "stopped: ran out of memory"}
     code = rc if rc > 0 else -rc
     return names.get(code, ("code 0x%X" % rc) if rc > 0 else "signal %d" % code)
 
@@ -318,6 +322,23 @@ def load_config():
     return cfg
 
 
+def device(cfg):
+    """(id, name) of this computer: tells sessions saved here apart from ones saved on your other computers."""
+    if not cfg.get("device_id"):
+        cfg["device_id"] = STATE.setdefault("device_id", secrets.token_hex(4))
+        if os.path.exists(LOCAL_CONFIG):      # before first-run setup nothing is written (a config file means "set up")
+            try:
+                with open(LOCAL_CONFIG, encoding="utf-8") as f:
+                    raw = json.load(f)
+                raw["device_id"] = cfg["device_id"]
+                save_config(raw)
+            except Exception:
+                pass
+    import platform
+    name = re.sub(r"\.local$", "", platform.node() or "") or "another computer"
+    return cfg["device_id"], name
+
+
 def save_config(cfg):
     write_text(LOCAL_CONFIG, json.dumps(cfg, indent=2))
     try:
@@ -394,11 +415,238 @@ def log_usage(cfg, usage, model):
         data = read_state(path) or {"days": {}}
         day = data["days"].setdefault(today(), {"cost": 0.0, "tokens": 0, "calls": 0})
         day["cost"] = round(day["cost"] + float(usage.get("cost") or 0), 6)
+        if usage.get("cost_estimated"):
+            day["estimated"] = True                 # part of today's cost is estimated from published prices
+        if usage.get("cost_unknown"):
+            day["unpriced"] = day.get("unpriced", 0) + 1
         day["tokens"] += int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
         day["calls"] += 1
+        # prompt caching: how much of the input was read from / written to the provider's cache, and what it saved
+        read, write, saved = cache_stats(usage)
+        day["prompt"] = day.get("prompt", 0) + int(usage.get("prompt_tokens") or 0)
+        day["cached"] = day.get("cached", 0) + read
+        day["cache_write"] = day.get("cache_write", 0) + write
+        day["saved"] = round(day.get("saved", 0.0) + saved, 6)
         write_state(path, data)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------- prices (cost estimates for every provider)
+# OpenRouter reports the exact cost of each call. Other cloud providers only report tokens, so CodeCoach multiplies them
+# by published prices: OpenRouter's public model list (no key, once a day, cached in ~/.codecoach/prices.json), which
+# lists the same models as OpenAI, Anthropic, Google, Mistral and DeepSeek sell directly. Your own prices win:
+# ~/.codecoach/price_overrides.json  {"openai:gpt-6-luna": {"input": 1.25, "output": 10, "cached": 0.125}}  (USD per 1M tokens)
+PRICES_URL = "https://openrouter.ai/api/v1/models"
+OR_VENDOR = {"openai": "openai", "anthropic": "anthropic", "gemini": "google", "mistral": "mistralai", "deepseek": "deepseek"}
+PRICE_STATE = {"key": None, "data": {}, "fetching": False, "ov_key": None, "ov": {}}
+# sidebar suggestions: the newest tool-capable OpenRouter model of each family (so the list never goes stale)
+SUGGEST = [(r"^deepseek/deepseek-v[\d.]+-flash$", "cheap"), (r"^google/gemini-[\d.]+-flash$", "cheap"),
+           (r"^anthropic/claude-[\w.-]*sonnet[\w.-]*$", ""), (r"^moonshotai/kimi-k[\d.]+$", ""), (r"^z-ai/glm-[\d.]+$", "")]
+SUGGEST_SKIP = re.compile(r"preview|exp|beta|vision|image|audio|online|extended|thinking|search|:nitro", re.I)
+
+
+def prices_file():
+    return os.path.join(LOCAL_DIR, "prices.json")
+
+
+def load_prices():
+    path = prices_file()
+    try:
+        st = os.stat(path)
+    except OSError:
+        return {}
+    key = (st.st_mtime, st.st_size)
+    if PRICE_STATE["key"] != key:
+        try:
+            with open(path, encoding="utf-8") as f:
+                PRICE_STATE["data"] = json.load(f)
+        except Exception:
+            PRICE_STATE["data"] = {}
+        PRICE_STATE["key"] = key
+    return PRICE_STATE["data"]
+
+
+def fetch_prices():
+    req = urllib.request.Request(PRICES_URL, headers={"User-Agent": "CodeCoach"})
+    with urlopen(req, 15) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    models = {}
+    for m in data.get("data", []):
+        pr = m.get("pricing") or {}
+        try:
+            p, c = float(pr.get("prompt") or 0), float(pr.get("completion") or 0)
+            cr = float(pr["input_cache_read"]) if pr.get("input_cache_read") not in (None, "") else None
+        except (TypeError, ValueError):
+            continue
+        if p < 0 or c < 0:                       # "-1" = variable price (routers)
+            continue
+        models[m.get("id", "")] = {"p": p, "c": c, "cr": cr, "name": re.sub(r"^[^:]+:\s*", "", m.get("name") or m.get("id", "")),
+                                   "created": int(m.get("created") or 0), "tools": "tools" in (m.get("supported_parameters") or [])}
+    if models:
+        write_text(prices_file(), json.dumps({"fetched_at": time.time(), "updated": today(), "models": models}))
+    return models
+
+
+def refresh_prices(force=False):
+    """Fetch the price list in the background when it is missing or a day old. Never blocks a request."""
+    if PRICE_STATE["fetching"]:
+        return
+    if not force and time.time() - float(load_prices().get("fetched_at") or 0) < 24 * 3600:
+        return
+    def run():
+        try:
+            fetch_prices()
+        except Exception as e:
+            print("price list not updated (%s)" % e)
+        finally:
+            PRICE_STATE["fetching"] = False
+    PRICE_STATE["fetching"] = True
+    threading.Thread(target=run, daemon=True).start()
+
+
+def price_overrides():
+    path = os.path.join(LOCAL_DIR, "price_overrides.json")
+    try:
+        key = os.path.getmtime(path)
+    except OSError:
+        return {}
+    if PRICE_STATE["ov_key"] != key:
+        try:
+            with open(path, encoding="utf-8") as f:
+                PRICE_STATE["ov"] = {k.lower(): v for k, v in json.load(f).items() if isinstance(v, dict)}
+        except Exception as e:
+            print("price_overrides.json ignored: %s" % e)
+            PRICE_STATE["ov"] = {}
+        PRICE_STATE["ov_key"] = key
+    return PRICE_STATE["ov"]
+
+
+def price_candidates(ai):
+    """OpenRouter ids that are the same model as this provider's model id."""
+    m = (ai.get("model") or "").strip().lower().replace("models/", "")
+    if ai["id"] == "openrouter":
+        return [m, re.sub(r":\w+$", "", m)]
+    m = re.sub(r"-(\d{8}|latest)$", "", m)                     # claude-sonnet-5-5-20260101 -> claude-sonnet-5-5
+    vendor = OR_VENDOR.get(ai["id"])
+    out = []
+    if vendor:
+        out.append(vendor + "/" + m)
+        if ai["id"] == "anthropic":
+            out.append(vendor + "/" + re.sub(r"(?<=\d)-(?=\d)", ".", m))   # claude-sonnet-5-5 -> claude-sonnet-5.5
+    return out + ["*/" + m.split("/")[-1]]
+
+
+def find_price(cfg, ai):
+    """USD per token (input, output, cached input) or None when unknown."""
+    ov = price_overrides()
+    for k in (ai.get("line", ""), "%s:%s" % (ai["id"], ai.get("model", "")), ai.get("model", "")):
+        v = ov.get(k.lower())
+        if v:
+            try:
+                i, o = float(v.get("input", 0)) / 1e6, float(v.get("output", 0)) / 1e6
+                return (i, o, float(v["cached"]) / 1e6 if v.get("cached") is not None else i)
+            except (TypeError, ValueError):
+                pass
+    if ai.get("local"):
+        return (0.0, 0.0, 0.0)
+    models = load_prices().get("models") or {}
+    for cand in price_candidates(ai):
+        if cand.startswith("*/"):
+            hits = sorted(k for k in models if k.lower().endswith(cand[1:]))
+            cand = hits[0] if hits else None
+        if cand and cand in models:
+            x = models[cand]
+            return (x["p"], x["c"], x["cr"] if x.get("cr") is not None else x["p"])
+    return None
+
+
+def add_cost(cfg, usage):
+    """Fill in usage['cost'] where the provider didn't (marked cost_estimated). Returns the same dict."""
+    if not isinstance(usage, dict) or usage.get("cost") is not None:
+        return usage
+    ai = parse_ai(cfg)
+    price = find_price(cfg, ai)
+    if price is None:
+        usage["cost_unknown"] = True
+        refresh_prices()
+        return usage
+    read, _, _ = cache_stats(usage)
+    prompt, out = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+    usage["cost"] = round(max(0, prompt - read) * price[0] + read * price[2] + out * price[1], 8)
+    if any(price):
+        usage["cost_estimated"] = True
+    return usage
+
+
+def suggested_models():
+    """[[id, label], ...] for the sidebar: newest model of each family + two newest free ones (from the cached list)."""
+    models = load_prices().get("models") or {}
+    out = []
+    for pat, tag in SUGGEST:
+        hits = [(v["created"], k) for k, v in models.items() if re.match(pat, k) and v.get("tools") and not SUGGEST_SKIP.search(k)]
+        if hits:
+            k = max(hits)[1]
+            out.append([k, models[k]["name"] + (" (%s)" % tag if tag else "")])
+    free = sorted(((v["created"], k) for k, v in models.items() if k.endswith(":free") and v.get("tools") and not SUGGEST_SKIP.search(k)), reverse=True)
+    out += [[k, models[k]["name"].replace(" (free)", "") + " (free)"] for _, k in free[:2]]
+    return out
+
+
+# ---------------------------------------------------------------- update check (opt-out in Settings > App)
+
+UPDATE_REPO = "lleyum/codecoach"     # where releases are published; downloaded builds record their own in static/build.json
+def update_file():
+    return os.path.join(LOCAL_DIR, "update.json")
+
+
+def version_tuple(v):
+    nums = re.findall(r"\d+", str(v or ""))[:4]
+    return tuple(int(n) for n in nums) + (0,) * (4 - len(nums))
+
+
+def update_status(cfg, force=False):
+    """Latest release vs this version. Asks GitHub at most once a day; works offline (just says nothing new)."""
+    try:
+        with open(update_file(), encoding="utf-8") as f:
+            st = json.load(f)
+    except Exception:
+        st = {}
+    out = {"current": VERSION, "enabled": cfg.get("check_updates", True) is not False}
+    if not out["enabled"]:
+        return out
+    if force or time.time() - float(st.get("checked_at") or 0) > 24 * 3600:
+        repo = UPDATE_REPO
+        try:
+            with open(os.path.join(STATIC_DIR, "build.json"), encoding="utf-8") as f:
+                repo = json.load(f).get("repo") or repo
+        except Exception:
+            pass
+        try:
+            req = urllib.request.Request("https://api.github.com/repos/%s/releases/latest" % repo,
+                                         headers={"Accept": "application/vnd.github+json", "User-Agent": "CodeCoach"})
+            with urlopen(req, 6) as r:
+                rel = json.loads(r.read().decode("utf-8"))
+            if not rel.get("draft") and not rel.get("prerelease"):
+                st.update({"latest": rel.get("tag_name", ""), "url": rel.get("html_url", ""), "notes": (rel.get("body") or "")[:4000]})
+            st["checked_at"] = time.time()
+            write_text(update_file(), json.dumps(st))
+        except Exception:
+            pass                                  # offline or rate-limited: try again next launch
+    latest = st.get("latest") or ""
+    out.update({"latest": latest, "url": st.get("url", ""), "notes": st.get("notes", ""), "skipped": st.get("skipped", ""),
+                "available": bool(latest) and version_tuple(latest) > version_tuple(VERSION) and latest != st.get("skipped")})
+    return out
+
+
+def skip_update(version):
+    try:
+        with open(update_file(), encoding="utf-8") as f:
+            st = json.load(f)
+    except Exception:
+        st = {}
+    st["skipped"] = version
+    write_text(update_file(), json.dumps(st))
 
 
 # ---------------------------------------------------------------- the Library folder
@@ -633,7 +881,7 @@ def create_course(cfg, info):
 # ---------------------------------------------------------------- markdown table helpers
 
 def split_row(line):
-    """Split a Markdown table row. `\|` is a literal pipe (also inside code), like Obsidian/GFM."""
+    r"""Split a Markdown table row. `\|` is a literal pipe (also inside code), like Obsidian/GFM."""
     s = line.strip()
     if s.startswith("|"):
         s = s[1:]
@@ -1005,22 +1253,193 @@ def extract_text(filename, raw):
 
 # ---------------------------------------------------------------- running code
 
-def run_proc(cmd, cwd, timeout, stdin_text=None, env=None):
+# ---------------------------------------------------------------- running code safely
+# Student code - and code the AI runs with run_code, which the student never sees - runs with limits:
+#  - every run is its own process group (Unix) / Job Object (Windows), so a timeout kills everything it started
+#  - macOS + Linux: CPU time, file size and open-file limits; Linux also caps memory (Java gets -Xmx instead)
+#  - macOS: the program itself (not the compiler) runs in a sandbox with no network and no writing outside its folder
+#  - output goes to files, read back up to 1 MB, so a print loop can't fill the server's memory
+RUN_LIMITS = {"fsize_mb": 50, "nofile": 256, "mem_mb": 1024, "win_mem_mb": 1536, "win_procs": 20}
+OUTPUT_CAP = 1024 * 1024
+JVM_HEAP = "-Xmx512m"
+
+_LIMIT_SHIM = r"""
+import os, sys, resource
+cpu, fsize, nofile, mem = (int(x) for x in sys.argv[1:5])
+def lim(name, v):
+    r = getattr(resource, name, None)
+    if r is None or v <= 0:
+        return
+    try:
+        soft, hard = resource.getrlimit(r)
+        if hard != resource.RLIM_INFINITY:
+            v = min(v, hard)
+        resource.setrlimit(r, (v, hard))
+    except Exception:
+        pass
+lim("RLIMIT_CPU", cpu); lim("RLIMIT_FSIZE", fsize); lim("RLIMIT_NOFILE", nofile)
+if sys.platform.startswith("linux"):
+    lim("RLIMIT_AS", mem)
+os.execvp(sys.argv[6], sys.argv[6:])
+"""
+
+
+def mac_sandbox_profile(folder):
+    folder = os.path.realpath(folder)
+    return """(version 1)
+(allow default)
+(deny network*)
+(allow network* (local unix))
+(deny file-write*)
+(allow file-write* (subpath "%s") (subpath "/private/var/folders") (subpath "/private/tmp")
+       (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/"))
+""" % folder.replace("\\", "\\\\").replace('"', '\\"')
+
+
+SANDBOX_STATE = {"mac_ok": None}
+
+
+def mac_sandbox_available():
+    if SANDBOX_STATE["mac_ok"] is None:
+        ok = sys.platform == "darwin" and os.path.exists("/usr/bin/sandbox-exec")
+        if ok:
+            try:
+                ok = subprocess.run(["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"],
+                                    capture_output=True, timeout=10).returncode == 0
+            except Exception:
+                ok = False
+            if not ok:
+                print("note: macOS sandbox-exec isn't usable here - code runs with limits but without the sandbox")
+        SANDBOX_STATE["mac_ok"] = ok
+    return SANDBOX_STATE["mac_ok"]
+
+
+def _win_job(proc_handle, mem_mb, max_procs):
+    """Put a (suspended) Windows process in a Job Object: memory and process-count caps, kill everything on close."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.windll.kernel32
+
+    class BASIC(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64), ("LimitFlags", wintypes.DWORD),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t), ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
+
+    class IO(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint64) for n in ("R", "W", "O", "RB", "WB", "OB")]
+
+    class EXT(ctypes.Structure):
+        _fields_ = [("Basic", BASIC), ("Io", IO), ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    info = EXT()
+    # KILL_ON_JOB_CLOSE | DIE_ON_UNHANDLED_EXCEPTION (no crash dialogs) | JOB_MEMORY | ACTIVE_PROCESS
+    info.Basic.LimitFlags = 0x2000 | 0x400 | 0x200 | 0x8
+    info.Basic.ActiveProcessLimit = max_procs
+    info.JobMemoryLimit = mem_mb * 1024 * 1024
+    k32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info))
+    if not k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(int(proc_handle))):
+        k32.CloseHandle(wintypes.HANDLE(job))
+        return None
+    return job
+
+
+def _win_resume(proc_handle):
+    import ctypes
+    from ctypes import wintypes
+    ctypes.windll.ntdll.NtResumeProcess(wintypes.HANDLE(int(proc_handle)))
+
+
+def _win_close_job(job, kill):
+    import ctypes
+    from ctypes import wintypes
+    if kill:
+        ctypes.windll.kernel32.TerminateJobObject(wintypes.HANDLE(job), 1)
+    ctypes.windll.kernel32.CloseHandle(wintypes.HANDLE(job))
+
+
+def run_proc(cmd, cwd, timeout, stdin_text=None, env=None, sandbox=False, mem_limit=True):
+    """Run one step (compile or run). sandbox=True for running the program itself: stricter limits, and the macOS sandbox.
+    mem_limit=False for runtimes that reserve lots of address space up front (Java, Node, Go) - Java gets -Xmx instead."""
     def clean(err):
         return "\n".join(l for l in (err or "").splitlines() if not l.startswith("Picked up JAVA_TOOL_OPTIONS"))
+    full = list(cmd)
+    kw = {}
+    if WINDOWS:
+        kw["creationflags"] = 0x00000200 | 0x08000000 | 0x00000004    # new process group | no window | start suspended
+    else:
+        kw["start_new_session"] = True
+        cpu = int(timeout) * 4 + 10                                    # backstop only: the wall-clock timeout below is the real limit
+        full = [python_exe(), "-I", "-S", "-c", _LIMIT_SHIM, str(cpu), str(RUN_LIMITS["fsize_mb"] * 1024 * 1024),
+                str(RUN_LIMITS["nofile"]), str(RUN_LIMITS["mem_mb"] * 1024 * 1024 if sandbox and mem_limit and os.path.basename(cmd[0]) not in ("java", "node") else 0),
+                "--"] + full
+        if sandbox and mac_sandbox_available():
+            full = ["/usr/bin/sandbox-exec", "-p", mac_sandbox_profile(cwd)] + full
     t0 = time.time()
+    outf = tempfile.TemporaryFile(dir=cwd)
+    errf = tempfile.TemporaryFile(dir=cwd)
     try:
-        p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                             env=env, encoding="utf-8", errors="replace")
+        p = subprocess.Popen(full, cwd=cwd, stdin=subprocess.PIPE, stdout=outf, stderr=errf, env=env, **kw)
     except FileNotFoundError as e:
         return {"rc": -2, "out": "", "err": "Program not found: %s. Is it installed?" % (e.filename or cmd[0]), "timeout": False, "ms": 0}
+    job = None
+    if WINDOWS:
+        try:
+            job = _win_job(p._handle, RUN_LIMITS["win_mem_mb"], RUN_LIMITS["win_procs"])
+        except Exception:
+            job = None
+        finally:
+            try:
+                _win_resume(p._handle)
+            except Exception:
+                pass
+    timed_out = False
     try:
-        out, err = p.communicate(input=stdin_text or "", timeout=timeout)
-        return {"rc": p.returncode, "out": out, "err": clean(err), "timeout": False, "ms": int((time.time() - t0) * 1000)}
-    except subprocess.TimeoutExpired:
-        p.kill()
-        out, err = p.communicate()
-        return {"rc": -1, "out": out or "", "err": clean(err), "timeout": True, "ms": int((time.time() - t0) * 1000)}
+        try:
+            p.communicate(input=(stdin_text or "").encode("utf-8"), timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            if WINDOWS:
+                if job:
+                    _win_close_job(job, True)
+                    job = None
+                else:
+                    p.kill()
+            else:
+                try:
+                    os.killpg(p.pid, 9)                                # the program and everything it started
+                except Exception:
+                    p.kill()
+            p.communicate()
+    finally:
+        if job:
+            _win_close_job(job, False)                                 # KILL_ON_JOB_CLOSE ends any leftovers
+        if not WINDOWS and not timed_out:
+            try:
+                os.killpg(p.pid, 9)                                    # stray background children
+            except Exception:
+                pass
+
+    def read(f):
+        f.seek(0)
+        data = f.read(OUTPUT_CAP + 1)
+        f.close()
+        text = data[:OUTPUT_CAP].decode("utf-8", "replace")
+        return text + ("\n[output cut off after 1 MB]" if len(data) > OUTPUT_CAP else "")
+    out, err = read(outf), read(errf)
+    rc = p.returncode
+    err = clean(err)
+    if sandbox and not WINDOWS and re.search(r"Operation not permitted|Permission denied|PermissionError", err) and mac_sandbox_available():
+        err += "\nBlocked: programs here can't use the internet or change files outside their own folder."
+    if re.search(r"File too large|EFBIG", err):
+        err += "\nStopped: the program printed or wrote more than %d MB." % RUN_LIMITS["fsize_mb"]
+    if re.search(r"MemoryError|std::bad_alloc|OutOfMemoryError|Cannot allocate memory", err):
+        err += "\nStopped: the program ran out of memory (limit %s)." % ("512 MB" if "OutOfMemoryError" in err else "about 1 GB")
+    return {"rc": rc, "out": out, "err": err, "timeout": timed_out, "ms": int((time.time() - t0) * 1000)}
 
 
 def fix_lines(stderr, filename, offset):
@@ -1127,7 +1546,7 @@ def java_tests(code, tests, d):
     r = run_proc(["javac", "-nowarn", "-encoding", "UTF-8", "-cp", ".", "-d", ".", "TestRunner.java"], d, 40)
     if r["rc"] != 0:
         return {"ok": False, "stage": "test_compile", "message": "The TEST code did not compile (not your fault):\n" + r["err"].strip(), "passed": 0, "total": 0}
-    return summarize_tests(run_proc(["java", "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-ea", "-Xss64m", "-cp", ".", "TestRunner"], d, 8))
+    return summarize_tests(run_proc(["java", "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-ea", "-Xss64m", JVM_HEAP, "-cp", ".", "TestRunner"], d, 8, sandbox=True))
 
 
 def java_snippet(code, stdin, d):
@@ -1161,7 +1580,7 @@ def java_snippet(code, stdin, d):
     r = run_proc(["javac", "-nowarn", "-encoding", "UTF-8", "-d", ".", fn], d, 40)
     if r["rc"] != 0:
         return {"ok": False, "stdout": "", "stderr": fix_lines(r["err"], fn, off), "compile_error": True}
-    return run_result(run_proc(["java", "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-ea", "-cp", ".", main_cls], d, 10, stdin))
+    return run_result(run_proc(["java", "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-ea", JVM_HEAP, "-cp", ".", main_cls], d, 10, stdin, sandbox=True))
 
 
 # --- Python
@@ -1229,13 +1648,13 @@ def python_tests(code, tests, d):
     if r["rc"] != 0:
         msg = (r["err"] or "Syntax error").strip()
         return {"ok": False, "stage": "compile", "message": msg, "passed": 0, "total": 0, "detail": msg}
-    return summarize_tests(run_proc([python_exe(), "tests.py"], d, 8))
+    return summarize_tests(run_proc([python_exe(), "tests.py"], d, 8, sandbox=True))
 
 
 def python_snippet(code, stdin, d):
     with open(os.path.join(d, "main.py"), "w", encoding="utf-8", newline="\n") as f:
         f.write(code)
-    return run_result(run_proc([python_exe(), "main.py"], d, 10, stdin))
+    return run_result(run_proc([python_exe(), "main.py"], d, 10, stdin, sandbox=True))
 
 
 # --- C++
@@ -1353,7 +1772,7 @@ def cpp_tests(code, tests, d):
         if nums and all(n > student_end for n in nums):
             return {"ok": False, "stage": "test_compile", "message": "The TEST code did not compile (check your function's name/signature matches the problem, or ask your coach):\n" + errs[:3000], "passed": 0, "total": 0}
         return {"ok": False, "stage": "compile", "message": fix_lines(errs, "main.cpp", CPP_HEADER.count("\n"))[:4000], "passed": 0, "total": 0}
-    return summarize_tests(run_proc([os.path.join(d, PROG)], d, 8))
+    return summarize_tests(run_proc([os.path.join(d, PROG)], d, 8, sandbox=True))
 
 
 def cpp_snippet(code, stdin, d):
@@ -1369,7 +1788,7 @@ def cpp_snippet(code, stdin, d):
     r = run_proc([cpp_compiler(), "-std=c++17", "-O0", "-Wall", "-o", PROG, "main.cpp"], d, 60)
     if r["rc"] != 0:
         return {"ok": False, "stdout": "", "stderr": fix_lines(r["err"], "main.cpp", off), "compile_error": True}
-    res = run_result(run_proc([os.path.join(d, PROG)], d, 10, stdin))
+    res = run_result(run_proc([os.path.join(d, PROG)], d, 10, stdin, sandbox=True))
     warn = fix_lines(r["err"], "main.cpp", off)
     if warn:
         res["warnings"] = warn
@@ -1404,7 +1823,7 @@ def c_tests(code, tests, d):
         if nums and all(n > student_end for n in nums):
             return {"ok": False, "stage": "test_compile", "message": "The TEST code did not compile:\n" + r["err"][:3000], "passed": 0, "total": 0}
         return {"ok": False, "stage": "compile", "message": fix_lines(r["err"], "main.c", C_HEADER.count("\n"))[:4000], "passed": 0, "total": 0}
-    return summarize_tests(run_proc([os.path.join(d, PROG)], d, 8))
+    return summarize_tests(run_proc([os.path.join(d, PROG)], d, 8, sandbox=True))
 
 
 def c_snippet(code, stdin, d):
@@ -1419,7 +1838,7 @@ def c_snippet(code, stdin, d):
     r = run_proc([c_compiler(), "-std=c11", "-O0", "-Wall", "-o", PROG, "main.c", "-lm"], d, 60)
     if r["rc"] != 0:
         return {"ok": False, "stdout": "", "stderr": fix_lines(r["err"], "main.c", off), "compile_error": True}
-    res = run_result(run_proc([os.path.join(d, PROG)], d, 10, stdin))
+    res = run_result(run_proc([os.path.join(d, PROG)], d, 10, stdin, sandbox=True))
     warn = fix_lines(r["err"], "main.c", off)
     if warn:
         res["warnings"] = warn
@@ -1458,13 +1877,13 @@ def js_tests(code, tests, d):
     r = run_proc(["node", "--check", "main.js"], d, 20)
     if r["rc"] != 0:
         return {"ok": False, "stage": "compile", "message": fix_lines(r["err"], "main.js", 0), "passed": 0, "total": 0}
-    return summarize_tests(run_proc(["node", "--stack-size=8000", "main.js"], d, 8))
+    return summarize_tests(run_proc(["node", "--stack-size=8000", "main.js"], d, 8, sandbox=True))
 
 
 def js_snippet(code, stdin, d):
     with open(os.path.join(d, "main.js"), "w", encoding="utf-8", newline="\n") as f:
         f.write(code)
-    return run_result(run_proc(["node", "main.js"], d, 10, stdin))
+    return run_result(run_proc(["node", "main.js"], d, 10, stdin, sandbox=True))
 
 
 # --- Go / Rust (playground only)
@@ -1479,7 +1898,7 @@ def go_snippet(code, stdin, d):
     r = run_proc(["go", "build", "-o", PROG, "main.go"], d, 90, env=env)
     if r["rc"] != 0:
         return {"ok": False, "stdout": "", "stderr": fix_lines(r["err"], "main.go", 0), "compile_error": True}
-    return run_result(run_proc([os.path.join(d, PROG)], d, 10, stdin))
+    return run_result(run_proc([os.path.join(d, PROG)], d, 10, stdin, sandbox=True, mem_limit=False))
 
 
 def rust_snippet(code, stdin, d):
@@ -1490,7 +1909,7 @@ def rust_snippet(code, stdin, d):
     r = run_proc(["rustc", "-o", PROG, "main.rs"], d, 90)
     if r["rc"] != 0:
         return {"ok": False, "stdout": "", "stderr": r["err"].strip(), "compile_error": True}
-    return run_result(run_proc([os.path.join(d, PROG)], d, 10, stdin))
+    return run_result(run_proc([os.path.join(d, PROG)], d, 10, stdin, sandbox=True))
 
 
 def run_result(r):
@@ -1589,9 +2008,42 @@ def http_error_text(e):
     return "AI error %s: %s%s" % (e.code, detail, hint)
 
 
+def needs_cache_marks(ai):
+    """Models that only cache when asked to (Claude via OpenRouter). Others cache the repeated start of each request on their own."""
+    return ai["id"] == "openrouter" and ai["model"].lower().startswith("anthropic/")
+
+
+def with_cache_marks(messages):
+    """Copy of the messages with two cache breakpoints: the system prompt (tools + system are cached for the whole session)
+    and the newest plain-text message (so the growing history is cached too)."""
+    out = [dict(m) for m in messages]
+    def mark(m):
+        if isinstance(m.get("content"), str) and m["content"]:
+            m["content"] = [{"type": "text", "text": m["content"], "cache_control": {"type": "ephemeral"}}]
+            return True
+        return False
+    if out and out[0].get("role") == "system":
+        mark(out[0])
+    for m in reversed(out[1:]):
+        if m.get("role") in ("user", "assistant") and mark(m):
+            break
+    return out
+
+
+def cache_stats(usage):
+    """(tokens read from cache, tokens written to cache, $ saved) from any provider's usage block."""
+    u = usage or {}
+    det = u.get("prompt_tokens_details") or {}
+    read = int(det.get("cached_tokens") or u.get("prompt_cache_hit_tokens") or u.get("cache_read_input_tokens") or 0)
+    write = int(det.get("cache_write_tokens") or u.get("cache_creation_input_tokens") or 0)
+    saved = float(u.get("cache_discount") or 0)
+    return read, write, saved
+
+
 def build_body(cfg, b, stream):
     ai = parse_ai(cfg)
-    body = {"model": ai["model"], "messages": b["messages"], "max_tokens": int(b.get("max_tokens") or cfg.get("max_tokens") or 8000)}
+    msgs = with_cache_marks(b["messages"]) if needs_cache_marks(ai) else b["messages"]
+    body = {"model": ai["model"], "messages": msgs, "max_tokens": int(b.get("max_tokens") or cfg.get("max_tokens") or 8000)}
     if ai["id"] == "openrouter":
         body["usage"] = {"include": True}            # OpenRouter reports the cost of each call
     elif stream and ai["id"] in STREAM_USAGE:
@@ -1617,6 +2069,7 @@ def call_llm_once(cfg, b):
         return {"error": "Could not reach the AI service: %s" % e}
     if not data.get("choices"):
         return {"error": "Unexpected reply from the AI: %s" % json.dumps(data)[:500]}
+    add_cost(cfg, data.get("usage"))
     log_usage(cfg, data.get("usage"), data.get("model"))
     return {"message": data["choices"][0].get("message", {}), "usage": data.get("usage", {}), "model": data.get("model")}
 
@@ -1653,7 +2106,9 @@ def learner_path(cfg):
     return p
 
 
-def build_system_prompt(cfg, folder, mode, topic):
+def build_system_prompt(cfg, folder, mode, topic, stats=None):
+    stats = stats if stats is not None else {}
+    stats.update({"full": 0, "sent": 0, "trimmed": {}})
     parts = [read_text(os.path.join(PROMPTS_DIR, "method.md"))]
     teach = read_text(os.path.expanduser(cfg.get("teach_skill_path") or ""))
     if teach:
@@ -1672,29 +2127,174 @@ def build_system_prompt(cfg, folder, mode, topic):
            "Course type: %s. Language: %s." % (meta["type"], LANGS[meta["language"]]["label"]),
            "Today: %s (%s)" % (today(), dt.date.today().strftime("%A")),
            "Session type: %s%s" % (mode or "learn", ("; topic: " + topic) if topic else "")]
+    terms = topic_terms(topic)
+    stats["topic_terms"] = sorted(terms)
+    def add_note(kind, title, text):
+        trimmed, note = trim_notes(kind, text, terms, mode)
+        stats["full"] += len(text)
+        stats["sent"] += len(trimmed) + len(note)
+        if note:
+            stats["trimmed"][kind] = len(text) - len(trimmed)
+        ctx.append("\n## %s note: %s\n\n%s%s" % (kind.upper(), title, trimmed, ("\n\n(" + note + ")") if note else ""))
     for kind, limit in (("profile", 8000), ("roadmap", 8000), ("blueprint", 24000), ("tracker", 8000), ("mistakes", 6000)):
         name = files.get(kind)
         if name:
-            ctx.append("\n## %s note: %s\n\n%s" % (kind.upper(), name, read_text(os.path.join(folder, name), limit)))
+            add_note(kind, name, read_text(os.path.join(folder, name), limit))
     tk = resolve_toolkit(folder, cfg)
     if tk:
-        ctx.append("\n## TOOLKIT note: %s\n\n%s" % (os.path.basename(tk), read_text(tk, 10000)))
+        add_note("toolkit", os.path.basename(tk), read_text(tk, 10000))
     if files.get("patterns"):
-        heads = re.findall(r"^## (.+)$", read_text(os.path.join(folder, files["patterns"])), re.M)
-        ctx.append("\n## PATTERN LIBRARY (entries so far): " + (", ".join(heads) or "none yet"))
+        ptext = read_text(os.path.join(folder, files["patterns"]))
+        heads = re.findall(r"^## (.+)$", ptext, re.M)
+        block = "\n## PATTERN LIBRARY (entries so far): " + (", ".join(heads) or "none yet")
+        related = [h for h in heads if mentions(h, terms)][:3]
+        for h in related:                                   # full text of the patterns this session is about
+            m = re.search(r"^## " + re.escape(h) + r"\s*\n(.*?)(?=^## |\Z)", ptext, re.M | re.S)
+            if m:
+                block += "\n\n### Pattern: %s\n%s" % (h, m.group(1).strip()[:3000])
+        if heads:
+            block += "\n(Full entries: read_note patterns.)"
+        ctx.append(block)
     units = list_materials(folder)
     if any(u["items"] for u in units):
-        lines = []
-        for u in units:
-            for it in u["items"]:
-                lines.append("- `%s` - %s (%s, %d chars)" % (it["path"], it["title"], it["type"], it["chars"]))
+        items = [it for u in units for it in u["items"]]
+        full_lines = ["- `%s` - %s (%s, %d chars)" % (it["path"], it["title"], it["type"], it["chars"]) for it in items]
+        if len(items) > TRIM_AT["materials"]:
+            newest_unit = max(items, key=lambda it: it.get("added") or "").get("unit", "")
+            pick = [l for it, l in zip(items, full_lines) if mentions(it["title"] + " " + it["path"], terms) or it.get("unit", "") == newest_unit][:60]
+            lines = pick + ["- ... %d more (call list_materials to see everything)" % (len(items) - len(pick))]
+        else:
+            lines = full_lines
+        stats["full"] += sum(len(l) + 1 for l in full_lines)
+        stats["sent"] += sum(len(l) + 1 for l in lines)
+        if len(lines) != len(full_lines):
+            stats["trimmed"]["materials"] = sum(len(l) + 1 for l in full_lines) - sum(len(l) + 1 for l in lines)
         ctx.append("\n## COURSE MATERIALS (read with read_material)\n" + "\n".join(lines[:150]))
     parts.append("\n".join(ctx))
     name = (cfg.get("coach_name") or "Coach").strip()[:40]
     if name.lower() != "coach":
         parts.insert(0, "Your name is %s. The student calls you %s; introduce yourself that way if it comes up." % (name, name))
-    return "\n\n---\n\n".join(p for p in parts if p)
+    prompt = "\n\n---\n\n".join(p for p in parts if p)
+    notes_full, notes_sent = stats["full"], stats["sent"]
+    stats["total"] = len(prompt)
+    stats["total_untrimmed"] = len(prompt) + (notes_full - notes_sent)
+    return prompt
 
+
+
+# ---------------------------------------------------------------- prompt trimming by relevance
+# Notes go into the system prompt once per session. Big notes are trimmed to what this session needs; the coach can
+# fetch any note in full with the read_note tool, and the prompt says what was left out.
+
+STOPWORDS = set("""the and for with how what this that from into your you are all can use using about review learn drill session
+practice problems problem content quiz quizzes questions question programming code coding write writing them they each other
+other also some more less than then when where which while just like make made need want new old one two three four five
+not no yes its it's his her their our out per via vs get put has default value values""".split())
+TRIM_AT = {"tracker": 4000, "toolkit": 4000, "mistakes": 3000, "blueprint": 6000, "materials": 40}
+GENERAL_BLUEPRINT = re.compile(r"rule|format|style|assert|null|check|quality|yellow box|package|allowed|addition|hint", re.I)
+
+
+def topic_terms(topic):
+    terms = set()
+    for w in re.findall(r"[A-Za-z][A-Za-z0-9+#]*", topic or ""):
+        parts = [w] + re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])", w)        # getOrDefault -> get, Or, Default; HashMap -> Hash, Map
+        for x in parts:
+            x = x.lower()
+            if len(x) < 3 or x in STOPWORDS:
+                continue
+            terms.add(x[:-1] if len(x) >= 4 and x.endswith("s") and not x.endswith("ss") else x)     # maps -> map, strings -> string
+    return terms
+
+
+def mentions(text, terms):
+    t = (text or "").lower()
+    return any(term in t for term in terms)
+
+
+def is_due(v):
+    v = (v or "").strip().lower()
+    return v == "now" or (re.match(r"^\d{4}-\d{2}-\d{2}$", v) is not None and v <= today())
+
+
+def filter_table(text, keep):
+    """Drop table rows for which keep(row) is False; everything else in the note stays. Returns (text, dropped rows)."""
+    lines, tables = parse_tables(text or "")
+    drop, dropped = set(), []
+    for t in tables:
+        keys = [norm_key(h) for h in t["header"]]
+        for ln, cells in t["rows"]:
+            row = dict(zip(keys, [c.replace("\\|", "|") for c in cells]))
+            if not keep(row):
+                drop.add(ln)
+                dropped.append(row)
+    return "\n".join(l for i, l in enumerate(lines) if i not in drop), dropped
+
+
+def trim_blueprint(text, terms, mode):
+    if mode == "quizsim" or len(text) <= TRIM_AT["blueprint"]:
+        return text, 0
+    chunks, cur = [], {"level": 0, "head": "", "body": []}
+    for line in text.split("\n"):
+        m = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if m:
+            chunks.append(cur)
+            cur = {"level": len(m.group(1)), "head": m.group(2), "body": [line]}
+        else:
+            cur["body"].append(line)
+    chunks.append(cur)
+    out, parent_keep, parent_catalog, dropped = [], True, False, 0
+    for c in chunks:
+        if c["level"] <= 1:
+            keep = True
+        elif c["level"] == 2:
+            keep = bool(GENERAL_BLUEPRINT.search(c["head"])) or mentions(c["head"], terms)
+            parent_keep, parent_catalog = keep, bool(re.search(r"topic|archetype|by ", c["head"], re.I))
+            if parent_catalog:
+                keep = True                       # keep the heading of a by-topic catalog; its entries are filtered below
+        else:
+            keep = mentions(c["head"], terms) or (parent_keep and not parent_catalog)
+        if keep:
+            out.extend(c["body"])
+        elif c["head"]:
+            dropped += 1
+    return "\n".join(out), dropped
+
+
+def trim_notes(kind, text, terms, mode):
+    """(text for the prompt, short note about what was left out)."""
+    if kind == "tracker" and len(text) > TRIM_AT["tracker"]:
+        text, gone = filter_table(text, lambda r: is_due(r.get("next review")) or "yes" not in (r.get("mastered") or "").lower()
+                                  or mentions(r.get("topic"), terms))
+        if gone:
+            return text, "Mastered and not due (rows not shown): " + ", ".join(r.get("topic", "?") for r in gone)
+    if kind == "toolkit" and len(text) > TRIM_AT["toolkit"]:
+        text2, gone = filter_table(text, lambda r: re.search(r"new|shaky", (r.get("status") or ""), re.I) or is_due(r.get("next review"))
+                                   or mentions((r.get("task") or "") + " " + (r.get("code") or ""), terms))
+        if gone and len(table_rows(text2)) == 0:
+            return text, ""                                         # nothing matched: keep the note as it is
+        if gone:
+            return text2, "%d solid toolkit rows not shown (read_note toolkit to see all)" % len(gone)
+    if kind == "mistakes" and len(text) > TRIM_AT["mistakes"]:
+        rows = table_rows(text)
+        def times(r):
+            try:
+                return int(re.sub(r"\D", "", r.get("times seen") or "") or 0)
+            except ValueError:
+                return 0
+        top = {id(r) for r in sorted(rows, key=times, reverse=True)[:10]}
+        keys = {(r.get("mistake"), r.get("example")) for r in rows if id(r) in top}
+        recent = (dt.date.today() - dt.timedelta(days=30)).isoformat()
+        def seen_recently(r):                     # Source records the session date (e.g. "session 2026-10-06")
+            d = re.findall(r"\d{4}-\d{2}-\d{2}", r.get("source") or "")
+            return bool(d) and max(d) >= recent
+        text, gone = filter_table(text, lambda r: (r.get("mistake"), r.get("example")) in keys or seen_recently(r) or mentions(" ".join(r.values()), terms))
+        if gone:
+            return text, "%d older, less frequent mistakes unrelated to this topic not shown (read_note mistakes to see all)" % len(gone)
+    if kind == "blueprint":
+        text, n = trim_blueprint(text, terms, mode)
+        if n:
+            return text, "%d blueprint sections unrelated to this session not shown (read_note blueprint to see all)" % n
+    return text, ""
 
 # ---------------------------------------------------------------- dashboard
 
@@ -1717,8 +2317,9 @@ def dashboard(cfg, folder):
         if m:
             nxt = m.group(1).strip()
             break
-    sessions = list_sessions(cfg, folder)
-    days = sorted({(s.get("updated") or "")[:10] for s in list_sessions(cfg, None) if s.get("updated")}, reverse=True)
+    every = list_sessions(cfg, None)
+    sessions = list_sessions(cfg, folder)                 # cheap: summaries come from the cache filled just above
+    days = sorted({(s.get("updated") or "")[:10] for s in every if s.get("updated")}, reverse=True)
     streak, d = 0, dt.date.today()
     if days and days[0] != today():
         d = d - dt.timedelta(days=1)
@@ -1736,26 +2337,94 @@ def dashboard(cfg, folder):
         if (s.get("updated") or "")[:10] in week:
             solved += s.get("solved", 0)
     return {"topics": topics, "toolkit": tk, "roadmap": roadmap, "next": nxt, "sessions": sessions[:8], "streak": streak,
-            "week_cost": round(week_cost, 4), "today_cost": round(usage.get(today(), {}).get("cost", 0), 4), "week_solved": solved}
+            "week_cost": round(week_cost, 4), "today_cost": round(usage.get(today(), {}).get("cost", 0), 4), "week_solved": solved,
+            "today_prompt": usage.get(today(), {}).get("prompt", 0), "today_cached": usage.get(today(), {}).get("cached", 0),
+            "week_saved": round(sum(usage.get(x, {}).get("saved", 0) for x in week), 4),
+            "estimated": any(usage.get(x, {}).get("estimated") for x in week),
+            "unpriced": sum(usage.get(x, {}).get("unpriced", 0) for x in week),
+            "prices_updated": load_prices().get("updated", "")}
+
+
+SESSION_META = {}            # path -> ((mtime, size), summary): only new or changed session files are re-read
+SESSION_META_LOCK = threading.Lock()
+
+
+def session_summary(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    with SESSION_META_LOCK:
+        hit = SESSION_META.get(path)
+    if hit and hit[0] == key:
+        return hit[1]
+    s = read_state(path)
+    summ = None
+    if s:
+        c = s.get("course", {}) or {}
+        summ = {"id": s.get("id"), "title": s.get("title"), "mode": s.get("mode"), "updated": s.get("updated"),
+                "course": c.get("name"), "folder": c.get("folder", ""), "rel": c.get("rel", ""),
+                "file": os.path.basename(path), "rev": int(s.get("rev") or 0), "device": s.get("device", ""),
+                "device_name": s.get("device_name", ""), "messages": len(s.get("messages", [])),
+                "solved": sum(1 for p in s.get("problems", []) if p.get("status") == "solved"), "problems": len(s.get("problems", []))}
+    with SESSION_META_LOCK:
+        SESSION_META[path] = (key, summ)
+    return summ
+
+
+def session_copies(d, names=None):
+    """Sync conflict copies, by session id. Dropbox ("x (conflicted copy).md"), iCloud ("x 2.md"), OneDrive ("x-LAPTOP.md"),
+    Syncthing ("x.sync-conflict-....md") and others all keep the file's contents, so a copy is any session file whose
+    name doesn't match the id inside it. A copy whose original is gone simply becomes the session again."""
+    out = {}
+    for n in sorted(names if names is not None else [x for x in os.listdir(d) if x.endswith(".md")]):
+        s = session_summary(os.path.join(d, n))
+        if not s or not s["id"] or n == s["id"] + ".md":
+            continue
+        sid = re.sub(r"[^\w\-]", "", s["id"])
+        main = os.path.join(d, sid + ".md")
+        if not os.path.exists(main):
+            try:
+                os.replace(os.path.join(d, n), main)
+            except OSError:
+                pass
+            continue
+        out.setdefault(sid, []).append(s)
+    return out
+
+
+def check_rev(cfg, cur, base_rev):
+    """None if a save based on base_rev may overwrite cur; otherwise who changed it since (another computer)."""
+    if not cur:
+        return None
+    me, _ = device(cfg)
+    if int(cur.get("rev") or 0) > int(base_rev or 0) and cur.get("device") and cur.get("device") != me:
+        return {"rev": int(cur.get("rev") or 0), "device_name": cur.get("device_name") or "another computer", "updated": cur.get("updated", "")}
+    return None
 
 
 def list_sessions(cfg, folder):
     d = os.path.join(sync_dir(cfg), "sessions")
+    names = [n for n in os.listdir(d) if n.endswith(".md")]
+    live = {os.path.join(d, n) for n in names}
+    with SESSION_META_LOCK:                      # forget deleted / moved sessions
+        for gone in [p for p in SESSION_META if p.startswith(d + os.sep) and p not in live]:
+            del SESSION_META[gone]
+    want = os.path.realpath(folder) if folder else None
     items = []
-    for n in os.listdir(d):
-        if not n.endswith(".md"):
-            continue
-        s = read_state(os.path.join(d, n))
-        if not s:
-            continue
-        if folder and os.path.realpath(s.get("course", {}).get("folder", "")) != os.path.realpath(folder):
-            # courses can live at different absolute paths on different computers - match on the vault-relative part
-            rel = s.get("course", {}).get("rel")
-            if not rel or os.path.realpath(from_rel(cfg["vault"], rel)) != os.path.realpath(folder):
+    copies = session_copies(d, names)
+    if any(n not in names for n in os.listdir(d)):
+        names = [n for n in os.listdir(d) if n.endswith(".md")]     # a lone copy was renamed back to its session
+    for n in names:
+        s = session_summary(os.path.join(d, n))
+        if not s or n != (s["id"] or "") + ".md":
+            continue                              # a sync conflict copy: shown with its session, not on its own
+        if want and os.path.realpath(s["folder"]) != want:
+            # courses can live at different absolute paths on different computers - match on the Library-relative part
+            if not s["rel"] or os.path.realpath(from_rel(cfg["vault"], s["rel"])) != want:
                 continue
-        items.append({"id": s.get("id"), "title": s.get("title"), "mode": s.get("mode"), "updated": s.get("updated"),
-                      "course": s.get("course", {}).get("name"), "solved": sum(1 for p in s.get("problems", []) if p.get("status") == "solved"),
-                      "problems": len(s.get("problems", []))})
+        items.append(dict({k: s[k] for k in ("id", "title", "mode", "updated", "course", "solved", "problems")}, versions=len(copies.get(s["id"], []))))
     items.sort(key=lambda s: s.get("updated") or "", reverse=True)
     return items
 
@@ -1854,6 +2523,8 @@ class Handler(BaseHTTPRequestHandler):
                     "languages": {k: {"label": v["label"], "tests": v["tests"], "available": bool(which_tool(k))} for k, v in LANGS.items()},
                     "material_types": MATERIAL_TYPES,
                     "platform": sys.platform,
+                    "suggested_models": suggested_models(),
+                    "device": dict(zip(("id", "name"), device(cfg))),
                 })
             if p == "/api/course":
                 folder = self.check_course(q["folder"], cfg)
@@ -1887,10 +2558,19 @@ class Handler(BaseHTTPRequestHandler):
                 rel = s.get("course", {}).get("rel")
                 if rel:  # re-anchor to this computer's vault path
                     s["course"]["folder"] = from_rel(cfg["vault"], rel)
+                s["versions"] = [{k: c[k] for k in ("file", "updated", "rev", "device_name", "messages", "problems", "solved")}
+                                 for c in session_copies(os.path.join(sync_dir(cfg), "sessions")).get(sid, [])]
                 return self.send_json(s)
+            if p == "/api/session/rev":
+                sid = re.sub(r"[^\w\-]", "", q["id"])
+                summ = session_summary(os.path.join(sync_dir(cfg), "sessions", sid + ".md")) or {}
+                return self.send_json({k: summ.get(k) for k in ("rev", "device", "device_name", "updated")})
             if p == "/api/system_prompt":
                 folder = self.check_course(q["folder"], cfg)
-                return self.send_json({"prompt": build_system_prompt(cfg, folder, q.get("mode"), q.get("topic"))})
+                stats = {}
+                prompt = build_system_prompt(cfg, folder, q.get("mode"), q.get("topic"), stats)
+                print("system prompt: %d chars (untrimmed %d) mode=%s topic=%r trimmed=%s" % (stats["total"], stats["total_untrimmed"], q.get("mode"), (q.get("topic") or "")[:60], stats["trimmed"]))
+                return self.send_json({"prompt": prompt, "stats": {k: stats[k] for k in ("total", "total_untrimmed", "trimmed", "topic_terms")}})
             if p in ("/api/models", "/api/local_models"):
                 line = q.get("ai") or (("x@" + q["base_url"]) if q.get("base_url") else None)
                 ai = parse_ai(cfg, line)
@@ -1900,6 +2580,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"ok": False, "error": "%s answered %s%s" % (ai["label"], e.code, " - add your API key first" if e.code in (401, 403) else "")})
                 except Exception as e:
                     return self.send_json({"ok": False, "error": "Couldn't reach %s (%s)%s" % (ai["url"], e, ". Is it running?" if ai["local"] else "")})
+            if p == "/api/update":
+                return self.send_json(update_status(cfg, force=q.get("force") == "1"))
             if p == "/api/snippets":
                 d = os.path.join(sync_dir(cfg), "snippets")
                 items = []
@@ -1969,6 +2651,8 @@ class Handler(BaseHTTPRequestHandler):
                     a2 = parse_ai(cfg)
                     if a2["id"] == "openrouter":
                         cfg["model"] = a2["model"]         # keeps older CodeCoach versions in step
+                if "check_updates" in b:
+                    cfg["check_updates"] = bool(b["check_updates"])
                 for k in ("vault", "model", "max_tokens", "teach_skill_path", "sync_dir", "compact_at", "auto_quit_minutes",
                           "coach_name", "provider", "base_url", "local_model", "local_key"):
                     if k in b and b[k] is not None:
@@ -2002,14 +2686,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(create_course(cfg, b))
             if p == "/api/session/save":
                 sid = re.sub(r"[^\w\-]", "", b["id"])
+                fp = os.path.join(sync_dir(cfg), "sessions", sid + ".md")
+                cur = read_state(fp)
+                clash = None if b.get("force") else check_rev(cfg, cur, b.get("rev"))
+                if clash:                            # changed on another computer since this one loaded it: don't overwrite
+                    return self.send_json({"error": "conflict", "conflict": clash}, 409)
+                b.pop("force", None)
+                b.pop("versions", None)
+                b["rev"] = max(int((cur or {}).get("rev") or 0), int(b.get("rev") or 0)) + 1
+                b["device"], b["device_name"] = device(cfg)
                 b["updated"] = dt.datetime.now().isoformat(timespec="seconds")
                 if b.get("course", {}).get("folder"):
                     try:
                         b["course"]["rel"] = relposix(b["course"]["folder"], cfg["vault"])
                     except ValueError:
                         pass
-                write_state(os.path.join(sync_dir(cfg), "sessions", sid + ".md"), b)
-                return self.send_json({"ok": True, "updated": b["updated"]})
+                write_state(fp, b)
+                return self.send_json({"ok": True, "updated": b["updated"], "rev": b["rev"]})
             if p == "/api/learner/write":
                 write_text(learner_path(cfg), b["text"])
                 return self.send_json({"ok": True})
@@ -2020,6 +2713,10 @@ class Handler(BaseHTTPRequestHandler):
                 st = read_state(fp)
                 if not st:
                     return self.send_json({"ok": False})
+                if "rev" in b and check_rev(cfg, st, b["rev"]):
+                    return self.send_json({"ok": False, "conflict": True}, 409)
+                st["rev"] = int(st.get("rev") or 0) + 1
+                st["device"], st["device_name"] = device(cfg)
                 for k in ("paused", "timer"):
                     if k in b:
                         st[k] = b[k]
@@ -2029,6 +2726,35 @@ class Handler(BaseHTTPRequestHandler):
                         byid[pp["id"]].update({k: v for k, v in pp.items() if k in ("code", "activeMs", "runningSince", "status", "solvedIn", "runs", "hints")})
                 st["updated"] = dt.datetime.now().isoformat(timespec="seconds")
                 write_state(fp, st)
+                return self.send_json({"ok": True})
+            if p == "/api/session/resolve":
+                # what to do with a sync conflict copy: "use" it (the current one goes to trash), "keep_both" (it becomes
+                # its own session), or "discard" it (to trash). Nothing is ever deleted outright.
+                sid = re.sub(r"[^\w\-]", "", b["id"])
+                d = os.path.join(sync_dir(cfg), "sessions")
+                copy = os.path.join(d, os.path.basename(b["file"]))
+                main = os.path.join(d, sid + ".md")
+                cs = read_state(copy)
+                if not cs or cs.get("id") != sid or copy == main:
+                    raise ValueError("That version is gone (maybe already handled on another computer).")
+                trash = os.path.join(sync_dir(cfg), "trash")
+                os.makedirs(trash, exist_ok=True)
+                stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+                action = b.get("action")
+                if action == "use":
+                    cs["rev"] = max(int(cs.get("rev") or 0), int((read_state(main) or {}).get("rev") or 0)) + 1
+                    shutil.move(main, os.path.join(trash, "%s (replaced %s).md" % (sid, stamp)))
+                    write_state(main, cs)
+                    os.remove(copy)
+                elif action == "keep_both":
+                    nid = sid + "-" + secrets.token_hex(2)
+                    cs.update(id=nid, rev=0, title=(cs.get("title") or "Session") + " (" + (cs.get("device_name") or "other copy") + ")")
+                    write_state(os.path.join(d, nid + ".md"), cs)
+                    os.remove(copy)
+                elif action == "discard":
+                    shutil.move(copy, os.path.join(trash, "%s (copy %s).md" % (sid, stamp)))
+                else:
+                    raise ValueError("unknown action")
                 return self.send_json({"ok": True})
             if p == "/api/session/delete":
                 sid = re.sub(r"[^\w\-]", "", b["id"])
@@ -2067,6 +2793,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True, "library": path, "courses": len(find_courses(path))})
             if p == "/api/pick_folder":
                 return self.send_json({"path": pick_folder(b.get("prompt") or "Choose your CodeCoach Library folder", b.get("start") or cfg["vault"])})
+            if p == "/api/update/skip":
+                skip_update(str(b.get("version") or ""))
+                return self.send_json({"ok": True})
             if p == "/api/open":
                 real = os.path.realpath(b.get("path") or "")
                 lib = os.path.realpath(cfg["vault"])
@@ -2151,6 +2880,14 @@ class Handler(BaseHTTPRequestHandler):
                 name = files.get("roadmap") or "Roadmap.md"
                 write_text(os.path.join(folder, name), b["markdown"].strip() + "\n")
                 return self.send_json({"result": "saved"})
+            if p == "/api/note/read":
+                kind = b.get("note") or ""
+                if kind == "learner":
+                    return self.send_json({"text": read_text(learner_path(cfg), 30000)})
+                path = resolve_toolkit(folder, cfg) if kind == "toolkit" else (os.path.join(folder, files[kind]) if files.get(kind) else None)
+                if not path:
+                    return self.send_json({"error": "This course has no %s note." % kind})
+                return self.send_json({"note": os.path.basename(path), "text": read_text(path, 30000)})
             if p == "/api/note/save_practice":
                 topic = slug(b.get("topic") or "Practice", 50)
                 name = re.sub(r"[^\w]", "", b.get("name") or "Problem") or "Problem"
@@ -2199,7 +2936,8 @@ class Handler(BaseHTTPRequestHandler):
                             try:
                                 obj = json.loads(payload)
                                 if obj.get("usage"):
-                                    usage, model = obj["usage"], obj.get("model")
+                                    usage, model = add_cost(cfg, obj["usage"]), obj.get("model")
+                                    line = "data: " + json.dumps(obj)       # now with the (estimated) cost in it
                             except Exception:
                                 pass
                         self.wfile.write((line + "\n").encode("utf-8"))
@@ -2251,7 +2989,7 @@ class Handler(BaseHTTPRequestHandler):
             z.writestr("settings (no API keys).json", json.dumps(safe, indent=2))
             z.writestr("HOW TO RESTORE.txt", "This is a complete CodeCoach export (%s).\n\n"
                        "Everything is plain Markdown - open it in any text editor or in Obsidian.\n\n"
-                       "To restore or move to another computer: unzip, then in CodeCoach open Settings > Notes & sync\n"
+                       "To restore or move to another computer: unzip, then in CodeCoach open Settings > Library & sync\n"
                        "and choose the unzipped 'CodeCoach Library' folder. Paste your API key again (keys are never exported).\n" % today())
         size = tmp.tell()
         tmp.seek(0)
@@ -2356,6 +3094,8 @@ def main():
     print("CodeCoach %s is running at %s" % (VERSION, url))
     # with an app window as parent, the server lives exactly as long as the window; otherwise it auto-quits when idle
     threading.Thread(target=watchdog, args=((lambda: 0) if a.parent_pid else (lambda: load_config().get("auto_quit_minutes", 20)), a.parent_pid), daemon=True).start()
+    if not parse_ai(cfg)["local"]:
+        refresh_prices()                  # cloud AI: keep the price list (cost estimates, sidebar models) a day fresh
     if not a.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

@@ -13,6 +13,7 @@ same Python the app uses for students. Exits non-zero with a reason on the first
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ import time
 import urllib.request
 
 PORT = 8799
+REAL_HOME = os.path.expanduser("~")
 BASE = "http://127.0.0.1:%d/" % PORT
 
 
@@ -47,6 +49,8 @@ def main():
     if "--" not in sys.argv:
         sys.exit(__doc__)
     cmd = sys.argv[sys.argv.index("--") + 1:] + ["--port", str(PORT), "--no-browser"]
+    global REAL_HOME
+    REAL_HOME = os.path.expanduser("~")
     home = tempfile.mkdtemp(prefix="cc-smoke-home-")
     env = dict(os.environ, HOME=home, USERPROFILE=home, CODECOACH_PACKAGED="ci", PYTHONUTF8="1")
     log = os.path.join(home, "smoke-server.log")
@@ -101,6 +105,37 @@ def main():
         if (r.get("stdout") or "").strip() != "hello":
             fail("Python playground run failed: %s" % json.dumps(r)[:600], proc, log)
         print("ok  Python playground with stdin")
+
+        # safety limits: a runaway program is stopped, and (macOS) the sandbox blocks writing outside the run folder and the network
+        _, r = get("api/run_snippet", token, {"language": "python", "code": "while True:\n    pass"}, timeout=60)
+        r = json.loads(r)
+        if not r.get("timed_out"):
+            fail("an infinite loop wasn't stopped: %s" % json.dumps(r)[:400], proc, log)
+        print("ok  infinite loop stopped after %.1f s" % (r.get("ms", 0) / 1000))
+        probe = os.path.join(REAL_HOME, "cc_smoke_probe.txt")
+        code = ("import urllib.request\n"
+                "try:\n    open(%r, 'w').write('x'); print('WROTE')\nexcept Exception as e: print('BLOCKED-WRITE', type(e).__name__)\n"
+                "try:\n    urllib.request.urlopen('https://example.com', timeout=5); print('NET')\nexcept Exception as e: print('BLOCKED-NET', type(e).__name__)\n") % probe
+        _, r = get("api/run_snippet", token, {"language": "python", "code": code}, timeout=60)
+        out = json.loads(r).get("stdout", "")
+        if os.path.exists(probe):
+            os.remove(probe)
+        if sys.platform == "darwin":
+            if "BLOCKED-WRITE" not in out or "BLOCKED-NET" not in out:
+                fail("macOS sandbox didn't block: %r" % out, proc, log)
+            print("ok  macOS sandbox: no writing outside the run folder, no network")
+        else:
+            print("ok  (sandbox is macOS-only; here: %s)" % " ".join(out.split()))
+
+        if shutil.which("javac") and shutil.which("java"):
+            _, r = get("api/run_tests", token, {"language": "java", "code": "int add(int a, int b) { return a + b; }",
+                                                   "tests": 't("add(1, 2)", 3, () -> s.add(1, 2));'}, timeout=120)
+            r = json.loads(r)
+            if not r.get("ok"):
+                fail("Java tests didn't run: %s" % json.dumps(r)[:600], proc, log)
+            print("ok  Java problem tests (with the run limits%s)" % (" and sandbox" if sys.platform == "darwin" else ""))
+        else:
+            print("--  no JDK on this machine, Java check skipped")
     finally:
         if proc.poll() is None:
             proc.terminate()
