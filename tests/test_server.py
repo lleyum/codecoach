@@ -159,6 +159,32 @@ class ServerTest(unittest.TestCase):
         self.app.api("/api/session/delete", {"id": "t1"})
         self.assertNotIn("t1", [x["id"] for x in self.app.api("/api/sessions")["sessions"]])
 
+    def test_outcomes_and_exam_report(self):
+        self.app.api("/api/note/tracker", {"folder": self.folder, "topic": "Recursion", "level": "R6", "mastered": "yes"})
+        self.app.api("/api/outcome/log", {"folder": self.folder, "event": {"type": "problem", "purpose": "pre", "topic": "Recursion", "passed": 1, "total": 4, "solved": False}})
+        self.app.api("/api/outcome/log", {"folder": self.folder, "event": {"type": "problem", "purpose": "post", "topic": "Recursion", "passed": 4, "total": 4, "solved": True, "hints": 0}})
+        with self.assertRaises(urllib.error.HTTPError):
+            self.app.api("/api/outcome/log", {"folder": self.folder, "event": {"type": "something"}})
+        o = self.app.api("/api/outcomes", {"folder": self.folder})
+        self.assertEqual(o["avg_gain"], 1.0)
+        self.assertGreaterEqual(o["events"], 3)                        # mastered + two problems
+        _, data = self.app.raw("/api/outcomes/csv", {"folder": self.folder})
+        self.assertIn(b"date,type,purpose,topic", data)
+        self.assertIn("Learning gain", server.read_text(o["file"]))
+        # a mastered topic 30+ days ago shows up in the coach's instructions as a retention check
+        path = os.path.join(self.folder, "Outcomes.md")
+        ev = server.outcome_events(self.folder)
+        for e in ev:
+            if e.get("type") == "mastered":
+                e["date"] = "2000-01-01"
+        server.write_text(path, server.outcomes_markdown("x", ev))
+        r = self.app.api("/api/system_prompt?mode=review&folder=" + urllib_quote(self.folder))
+        self.assertIn("RETENTION CHECKS DUE", r["prompt"])
+        self.assertIn("Recursion: 30 days", r["prompt"])
+        r = self.app.api("/api/exam/save", {"folder": self.folder, "title": "Week 6: Lists?", "markdown": "# Exam"})
+        self.assertTrue(r["rel"].endswith("exams/" + server.today() + " Week 6- Lists.md"), r["rel"])
+        self.assertEqual(self.app.api("/api/exam/save", {"folder": self.folder, "title": "Week 6: Lists?", "markdown": "# Exam"})["rel"][-6:], "(2).md")
+
     def sess(self, sid, **kw):
         return dict({"id": sid, "title": "S " + sid, "mode": "learn", "course": {"name": "Python track", "folder": self.folder},
                      "messages": [], "display": [], "problems": [], "usage": {"cost": 0, "tokens": 0}}, **kw)

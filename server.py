@@ -14,6 +14,7 @@ Standard library only. Works with Python 3.8+ on macOS, Windows and Linux.
 """
 import argparse
 import base64
+import csv
 import datetime as dt
 import difflib
 import html
@@ -36,7 +37,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 VENDOR_DIR = os.path.join(STATIC_DIR, "vendor")
@@ -2155,6 +2156,13 @@ def build_system_prompt(cfg, folder, mode, topic, stats=None):
         if heads:
             block += "\n(Full entries: read_note patterns.)"
         ctx.append(block)
+    try:
+        due = retention_due(outcome_events(folder))
+    except Exception:
+        due = []
+    if due:
+        ctx.append("\n## RETENTION CHECKS DUE (mastered topics; give each one fresh R5 problem with purpose \"retention\" and window = the days)\n" +
+                   "\n".join("- %s: %d days since mastery" % (t, d) for t, d in due))
     units = list_materials(folder)
     if any(u["items"] for u in units):
         items = [it for u in units for it in u["items"]]
@@ -2231,7 +2239,7 @@ def filter_table(text, keep):
 
 
 def trim_blueprint(text, terms, mode):
-    if mode == "quizsim" or len(text) <= TRIM_AT["blueprint"]:
+    if mode in ("quizsim", "exam") or len(text) <= TRIM_AT["blueprint"]:
         return text, 0
     chunks, cur = [], {"level": 0, "head": "", "body": []}
     for line in text.split("\n"):
@@ -2295,6 +2303,159 @@ def trim_notes(kind, text, terms, mode):
         if n:
             return text, "%d blueprint sections unrelated to this session not shown (read_note blueprint to see all)" % n
     return text, ""
+
+# ---------------------------------------------------------------- learning outcomes (per course, in "Outcomes.md")
+# Measured, not assumed: pre-checks before a topic is taught and parallel post-checks after mastery (learning gain),
+# retention probes 30/60/90 days after mastery, transfer problems in new contexts, practice and exam results.
+# Everything stays in the course folder; the student can export a CSV by hand. Nothing is sent anywhere.
+OUTCOME_KINDS = ("practice", "pre", "post", "retention", "transfer")
+RETENTION_DAYS = (30, 60, 90)
+OUTCOME_LOCK = threading.Lock()
+
+
+def outcomes_path(folder):
+    return os.path.join(folder, "Outcomes.md")
+
+
+def outcome_events(folder):
+    return (read_state(outcomes_path(folder)) or {}).get("events", [])
+
+
+def _int(v, default=0):
+    try:
+        return int(float(re.sub(r"[^\d.\-]", "", str(v)) or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def outcome_log(folder, ev):
+    ev = {k: v for k, v in (ev or {}).items() if v is not None and k != "date"}
+    for k in ("window", "rung", "hints", "runs", "passed", "total", "ms", "pct"):
+        if k in ev and not isinstance(ev[k], (int, float)):
+            ev[k] = _int(ev[k])
+    ev["date"] = today()
+    with OUTCOME_LOCK:
+        events = outcome_events(folder)
+        events.append(ev)
+        write_text(outcomes_path(folder), outcomes_markdown(os.path.basename(folder), events))
+    return ev
+
+
+def _frac(e):
+    try:
+        return max(0.0, min(1.0, float(e.get("passed") or 0) / float(e.get("total")))) if e.get("total") else (1.0 if e.get("solved") else 0.0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _clean(e):
+    """Solved with no hints = the kind of success that counts for mastery."""
+    return bool(e.get("solved")) and not _int(e.get("hints"))
+
+
+def retention_due(events):
+    """[(topic, days)] mastered topics whose next 30/60/90-day retention probe is due."""
+    mastered, probes = {}, {}
+    for e in events:
+        if e.get("type") == "mastered":
+            mastered[norm_key(e.get("topic"))] = (e.get("topic"), e.get("date"))
+        elif e.get("type") == "problem" and e.get("purpose") == "retention":
+            probes.setdefault(norm_key(e.get("topic")), []).append(e.get("date") or "")
+    out, now = [], dt.date.today()
+    for key, (topic, d0) in mastered.items():
+        try:
+            start = dt.date.fromisoformat(d0)
+        except (TypeError, ValueError):
+            continue
+        for days in RETENTION_DAYS:
+            due = start + dt.timedelta(days=days)
+            if now < due:
+                break
+            if not any(p >= due.isoformat() for p in probes.get(key, [])):
+                out.append((topic, days))
+                break
+    return out
+
+
+def outcome_stats(events):
+    probs = [e for e in events if e.get("type") == "problem"]
+    by = lambda kind: [e for e in probs if (e.get("purpose") or "practice") == kind]
+    # learning gain: the latest pre-check and the first post-check after it, per topic (Hake's normalized gain)
+    gains = []
+    for key in {norm_key(e.get("topic")) for e in by("pre")}:
+        pre = [e for e in by("pre") if norm_key(e.get("topic")) == key][-1]
+        post = [e for e in by("post") if norm_key(e.get("topic")) == key and (e.get("date") or "") >= (pre.get("date") or "")]
+        if post:
+            a, b = _frac(pre), _frac(post[0])
+            gains.append({"topic": pre.get("topic"), "pre": a, "post": b, "gain": None if a >= 1 else round((b - a) / (1 - a), 2)})
+    g = [x["gain"] for x in gains if x["gain"] is not None]
+    ret = {}
+    for e in by("retention"):
+        ret.setdefault(_int(e.get("window"), 30) or 30, []).append(_clean(e))
+    trans = [_clean(e) for e in by("transfer")]
+    months = {}
+    for e in probs:
+        if not e.get("solved") or _int(e.get("rung")) < 5:
+            continue
+        m = months.setdefault((e.get("date") or "")[:7], {"n": 0, "min": 0.0, "hints": 0, "clean": 0})
+        m["n"] += 1
+        m["min"] += float(e.get("ms") or 0) / 60000
+        m["hints"] += _int(e.get("hints"))
+        m["clean"] += 1 if _clean(e) else 0
+    exams = [e for e in events if e.get("type") == "exam"]
+    return {
+        "gains": gains, "avg_gain": round(sum(g) / len(g), 2) if g else None,
+        "retention": {d: {"n": len(v), "kept": sum(v)} for d, v in sorted(ret.items())},
+        "retention_rate": round(sum(sum(v) for v in ret.values()) / max(1, sum(len(v) for v in ret.values())), 2) if ret else None,
+        "transfer": {"n": len(trans), "ok": sum(trans)},
+        "months": [dict(m, month=k, avg_min=round(m["min"] / m["n"], 1), avg_hints=round(m["hints"] / m["n"], 2), first_try=round(m["clean"] / m["n"], 2))
+                   for k, m in sorted(months.items())],
+        "exams": [{"date": e.get("date"), "title": e.get("title"), "pct": e.get("pct")} for e in exams],
+        "problems": len(probs), "due": retention_due(events),
+    }
+
+
+def outcomes_markdown(name, events):
+    st = outcome_stats(events)
+    pct = lambda x: "-" if x is None else "%d%%" % round(100 * x)
+    L = ["# Outcomes", "", "#codecoach", "",
+         "What studying with CodeCoach has actually done for you in %s, measured from your own work. Updated automatically; "
+         "the data at the bottom is what CodeCoach reads, everything above is regenerated from it." % name, "",
+         "| Measure | Result | What it means |", "| --- | --- | --- |",
+         "| Learning gain | %s | Average normalized gain from a pre-check before a topic was taught to a parallel post-check after mastery (0 = no change, 100%% = everything you didn't know) |" % pct(st["avg_gain"]),
+         "| Retention | %s | Mastered topics still solved without hints 30/60/90 days later |" % pct(st["retention_rate"]),
+         "| Transfer | %s | New-context problems solved without hints (%d tried) |" % (pct(st["transfer"]["ok"] / st["transfer"]["n"]) if st["transfer"]["n"] else "-", st["transfer"]["n"]),
+         "| Problems logged | %d | Every coding problem you finished or gave up on |" % st["problems"], ""]
+    if st["due"]:
+        L += ["**Retention checks due:** " + ", ".join("%s (%d days)" % (t, d) for t, d in st["due"]), ""]
+    if st["gains"]:
+        L += ["## Learning gain by topic", "", "| Topic | Pre-check | Post-check | Gain |", "| --- | --- | --- | --- |"]
+        L += ["| %s | %s | %s | %s |" % (x["topic"], pct(x["pre"]), pct(x["post"]), pct(x["gain"])) for x in st["gains"]] + [""]
+    if st["retention"]:
+        L += ["## Retention", "", "| After | Probes | Kept |", "| --- | --- | --- |"]
+        L += ["| %d days | %d | %s |" % (d, v["n"], pct(v["kept"] / v["n"])) for d, v in st["retention"].items()] + [""]
+    if st["months"]:
+        L += ["## Speed and independence (R5/R6 problems solved)", "", "| Month | Solved | Avg minutes | Avg hints | First try |", "| --- | --- | --- | --- | --- |"]
+        L += ["| %s | %d | %s | %s | %s |" % (m["month"], m["n"], m["avg_min"], m["avg_hints"], pct(m["first_try"])) for m in st["months"]] + [""]
+    if st["exams"]:
+        L += ["## Practice exams", "", "| Date | Exam | Score |", "| --- | --- | --- |"]
+        L += ["| %s | %s | %s%% |" % (e["date"], (e["title"] or "").replace("|", "-"), e["pct"]) for e in st["exams"]] + [""]
+    L += ["## Data (used by CodeCoach, do not edit by hand)", "", "```json", json.dumps({"events": events}), "```", ""]
+    return "\n".join(L)
+
+
+OUTCOME_CSV_COLS = ["date", "type", "purpose", "topic", "name", "rung", "solved", "passed", "total", "hints", "runs", "minutes", "window", "title", "pct"]
+
+
+def outcomes_csv(events):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(OUTCOME_CSV_COLS)
+    for e in events:
+        row = dict(e, minutes=round(float(e.get("ms") or 0) / 60000, 1) if e.get("ms") is not None else "")
+        w.writerow(["" if row.get(c) is None else row.get(c) for c in OUTCOME_CSV_COLS])
+    return buf.getvalue()
+
 
 # ---------------------------------------------------------------- dashboard
 
@@ -2720,6 +2881,8 @@ class Handler(BaseHTTPRequestHandler):
                 for k in ("paused", "timer"):
                     if k in b:
                         st[k] = b[k]
+                if isinstance(b.get("exam"), dict) and isinstance(st.get("exam"), dict) and st["exam"].get("phase") == "running":
+                    st["exam"].update({k: v for k, v in b["exam"].items() if k in ("answers", "codes", "timeOn", "away", "fsExits", "current", "runs")})
                 byid = {pp.get("id"): pp for pp in st.get("problems", [])}
                 for pp in b.get("problems", []):
                     if pp.get("id") in byid:
@@ -2848,7 +3011,10 @@ class Handler(BaseHTTPRequestHandler):
                     nr = next_review(outcome, old.get("last practiced", ""), old.get("next review", ""))
                 vals = {"Level": b.get("level"), "Mastered": b.get("mastered"), "Last practiced": b.get("last_practiced") or today(),
                         "Next review": nr, "Notes": b.get("notes")}
+                was = next((r for r in table_rows(read_text(path)) if norm_key(r.get("topic")) == norm_key(b["topic"])), {})
                 res = upsert_row(path, b["topic"], vals)
+                if str(b.get("mastered") or "").lower() == "yes" and "yes" not in (was.get("mastered") or "").lower():
+                    outcome_log(folder, {"type": "mastered", "topic": b["topic"]})
                 return self.send_json({"result": res, "next_review": nr})
             if p == "/api/note/toolkit":
                 path = resolve_toolkit(folder, cfg)
@@ -2888,6 +3054,33 @@ class Handler(BaseHTTPRequestHandler):
                 if not path:
                     return self.send_json({"error": "This course has no %s note." % kind})
                 return self.send_json({"note": os.path.basename(path), "text": read_text(path, 30000)})
+            if p == "/api/outcome/log":
+                ev = b.get("event") or {}
+                if ev.get("type") not in ("problem", "exam"):
+                    raise ValueError("unknown outcome event")
+                if ev.get("type") == "problem" and ev.get("purpose") not in OUTCOME_KINDS:
+                    ev["purpose"] = "practice"
+                return self.send_json({"logged": outcome_log(folder, ev)})
+            if p == "/api/outcomes":
+                events = outcome_events(folder)
+                return self.send_json(dict(outcome_stats(events), events=len(events), file=outcomes_path(folder)))
+            if p == "/api/outcomes/csv":
+                data = outcomes_csv(outcome_events(folder)).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if p == "/api/exam/save":
+                # graded practice exam: a readable report in the course's exams/ folder
+                d = os.path.join(folder, "exams")
+                base = "%s %s" % (today(), slug(b.get("title") or "Exam", 60))
+                name, i = base + ".md", 2
+                while os.path.exists(os.path.join(d, name)):
+                    name, i = "%s (%d).md" % (base, i), i + 1
+                write_text(os.path.join(d, name), b.get("markdown") or "")
+                return self.send_json({"path": os.path.join(d, name), "rel": relposix(os.path.join(d, name), cfg["vault"])})
             if p == "/api/note/save_practice":
                 topic = slug(b.get("topic") or "Practice", 50)
                 name = re.sub(r"[^\w]", "", b.get("name") or "Problem") or "Problem"

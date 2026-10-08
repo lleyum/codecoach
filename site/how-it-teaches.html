@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="The teaching methods inside CodeCoach, the research behind each one, and where that research stops.">
+<link rel="icon" href="icon.png">
+<title>How CodeCoach teaches</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700;800&display=swap">
+<style>
+:root {
+  --bg: #f6f5f1; --surface: #ffffff; --surface-2: #eeede7; --line: #dcdad2;
+  --text: #1b1b22; --muted: #5d5c66; --accent: #4b45d6; --accent-ink: #ffffff;
+  --good: #1d7a46; --good-bg: #e2f3e8; --code-bg: #f1f0ea; --syn-kw: #7c3aed; --syn-str: #0f7a5a; --syn-num: #b4540a; --syn-fn: #2257c7;
+  --display: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111118; --surface: #191922; --surface-2: #22222d; --line: #2e2e3b;
+    --text: #ececf2; --muted: #a2a1b0; --accent: #8f8bff; --accent-ink: #12121a;
+    --good: #5fd69a; --good-bg: #173326; --code-bg: #15151d; --syn-kw: #c49bff; --syn-str: #6fe0b4; --syn-num: #ffb366; --syn-fn: #7fb2ff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111118; --surface: #191922; --surface-2: #22222d; --line: #2e2e3b;
+  --text: #ececf2; --muted: #a2a1b0; --accent: #8f8bff; --accent-ink: #12121a;
+  --good: #5fd69a; --good-bg: #173326; --code-bg: #15151d; --syn-kw: #c49bff; --syn-str: #6fe0b4; --syn-num: #ffb366; --syn-fn: #7fb2ff;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font: 17px/1.7 var(--body); margin: 0; }
+a { color: var(--accent); }
+.wrap { max-width: 1060px; margin: 0 auto; padding-inline: 20px; }
+.nav { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+.nav .wrap { display: flex; align-items: center; gap: 22px; padding-block: 12px; flex-wrap: wrap; }
+.brand { font: 700 16px var(--display); color: var(--text); text-decoration: none; }
+.brand b { color: var(--accent); }
+.nav .links { display: flex; gap: 18px; margin-left: auto; flex-wrap: wrap; }
+.nav .links a { color: var(--muted); text-decoration: none; font: 500 13px var(--mono); }
+.article { max-width: 720px; padding-block: 48px 64px; }
+.label { font: 600 12px var(--mono); color: var(--accent); margin: 0 0 10px; }
+h1 { font: 800 clamp(28px, 4.6vw, 44px)/1.1 var(--display); letter-spacing: -0.035em; margin: 0 0 28px; text-wrap: balance; }
+h2 { font: 800 clamp(21px, 2.8vw, 27px)/1.2 var(--display); letter-spacing: -0.02em; margin: 44px 0 12px; text-wrap: balance; }
+p, ul { margin: 0 0 16px; }
+li + li { margin-top: 6px; }
+.tablewrap { overflow-x: auto; margin: 0 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px var(--mono); color: var(--muted); }
+td:first-child { font-family: var(--mono); font-size: 13.5px; white-space: nowrap; }
+.ladder { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; align-items: end; margin: 8px 0 22px; }
+.ladder div { border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--surface); font-size: 12.5px; line-height: 1.35; color: var(--muted); min-width: 0; }
+.ladder b { display: block; font: 800 15px var(--display); color: var(--accent); }
+.ladder div:nth-child(1) { min-height: 64px; } .ladder div:nth-child(2) { min-height: 78px; } .ladder div:nth-child(3) { min-height: 92px; }
+.ladder div:nth-child(4) { min-height: 106px; } .ladder div:nth-child(5) { min-height: 120px; } .ladder div:nth-child(6) { min-height: 134px; }
+.ladder div:nth-child(7) { min-height: 148px; border-color: var(--accent); }
+.ladder figcaption { grid-column: 1 / -1; display: flex; justify-content: space-between; font: 12px var(--mono); color: var(--muted); border-top: 1px solid var(--line); padding-top: 6px; }
+.gaps { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font: 13px var(--mono); color: var(--muted); }
+.gaps span { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--surface); color: var(--text); }
+.btn { display: inline-flex; padding: 11px 18px; border-radius: 11px; font: 600 14px var(--mono); text-decoration: none; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.refs { font-size: 14.5px; color: var(--muted); padding-left: 18px; }
+footer { border-top: 1px solid var(--line); padding-block: 26px 40px; font: 12.5px var(--mono); color: var(--muted); }
+@media (max-width: 640px) { .ladder { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ladder div { min-height: 0 !important; } }
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="./"><b>❯</b> codecoach</a><nav class="links"><a href="./#how">How it works</a><a href="./#pricing">Pricing</a><a href="./#download">Download</a></nav></div></header>
+<main class="wrap article">
+<p class="label">❯ how codecoach teaches</p>
+<h1>How CodeCoach teaches: a research-backed way to learn to code</h1>
+
+<h2>Watching isn't learning</h2>
+<p>CodeCoach is built on one idea: you learn to code by writing code from memory, getting exact feedback, and coming back to it before you forget. Every part of the app follows from that, and from the research behind it.</p>
+<p>Most people learn programming by watching. A tutorial makes every line look obvious, because you only have to <em>recognize</em> it. Then you open an empty editor and nothing comes, because writing code needs <em>recall</em>: pulling the right construct out of memory and putting it together yourself. Recognition feels like learning. Recall is what actually builds it.</p>
+<p>This page walks through the teaching methods inside CodeCoach, what the research says about each one, and where that research stops. The short version:</p>
+<ul>
+<li>A <b>ladder</b> of seven kinds of practice, from typing one line to timed problems, with help that fades as you climb.</li>
+<li><b>Predict before you run</b>, so you think about code before the computer does it for you.</li>
+<li><b>Explain in your own words</b>, because explaining exposes the gaps.</li>
+<li><b>Struggle a little on purpose</b>, then get a clear explanation.</li>
+<li><b>Spaced reviews</b> that bring a topic back just before you'd forget it.</li>
+<li><b>Mixed practice</b>, so you learn to choose the right tool, not just use the one in front of you.</li>
+</ul>
+
+<h2>The ladder: seven rungs from one line to a timed problem</h2>
+<p>Every topic in CodeCoach is practiced on a ladder of seven rungs, R0 to R6. Each rung asks you to produce a bit more of the code yourself, with a bit less help.</p>
+<figure class="ladder" aria-label="The mastery ladder, R0 to R6: each rung asks for more of your own code, with less help">
+<div><b>R0</b>Syntax drill</div><div><b>R1</b>Trace</div><div><b>R2</b>Parsons</div><div><b>R3</b>Fill in</div><div><b>R4</b>Debug</div><div><b>R5</b>From scratch</div><div><b>R6</b>Timed</div>
+<figcaption><span>Most help</span><span>Only the problem statement</span></figcaption>
+</figure>
+<div class="tablewrap"><table>
+<thead><tr><th>Rung</th><th>You do</th><th>Help you get</th></tr></thead>
+<tbody>
+<tr><td>R0 Syntax drill</td><td>Type one expression or statement from memory</td><td>The task in plain words</td></tr>
+<tr><td>R1 Trace</td><td>Predict what a snippet prints</td><td>The whole program</td></tr>
+<tr><td>R2 Parsons</td><td>Put scrambled lines in order</td><td>Every line, plus a few decoys</td></tr>
+<tr><td>R3 Fill in</td><td>Write the missing part</td><td>The structure around the gap</td></tr>
+<tr><td>R4 Debug</td><td>Find and fix a planted bug</td><td>Working code with one mistake</td></tr>
+<tr><td>R5 From scratch</td><td>Write the method yourself</td><td>Only the problem statement and tests</td></tr>
+<tr><td>R6 Timed</td><td>Write it under a clock</td><td>Nothing but the statement</td></tr>
+</tbody></table></div>
+<p>A topic counts as <b>mastered</b> when you solve three new problems on it without hints. Where you start depends on what the coach sees: someone who freezes at a blank editor starts low and climbs; someone who already writes loops fluently skips straight to R5.</p>
+<p><b>Why Parsons problems (R2) belong on the ladder.</b> In a Parsons problem you get every line of a solution, scrambled, and put them in order. <a href="https://computinged.wordpress.com/2017/11/17/parsons-problems-have-same-learning-gains-as-writing-or-fixing-code-in-less-time-koli-calling-2017-preview/">Ericson, Margulieux and Rick (2017)</a> compared three ways to practice: solving Parsons problems, fixing code with the same errors, and writing the equivalent code. All three produced the same learning gains from pretest to posttest, and Parsons problems took less time. For a beginner, that's a cheaper way to the same place.</p>
+<p><b>Why the help fades.</b> Worked examples and step-by-step scaffolds help beginners, because they don't yet have the patterns to fill in the gaps themselves. The same support gets in the way once you do have those patterns. Researchers call this the expertise reversal effect (<a href="https://ro.uow.edu.au/edupapers/136">Kalyuga, Ayres, Chandler and Sweller, 2003</a>). So CodeCoach doesn't keep you on the easy rungs: as you succeed, problems move up the ladder and the hints get shorter.</p>
+
+<h2>Predict before you run</h2>
+<p>Before the coach shows what a piece of code does, it asks you what you think it will do. Only then do you run it, compare, and change it.</p>
+<p>This order comes from PRIMM: <b>Predict, Run, Investigate, Modify, Make</b>. In a study of 493 students aged 11 to 14 in 13 schools, classes taught with PRIMM scored higher on a programming post-test than classes taught the usual way (<a href="https://qmro.qmul.ac.uk/xmlui/handle/123456789/57800">Sentance, Waite and Kallia, 2019</a>). Teachers also reported that it helped mixed-ability classes, with every student making progress.</p>
+<p>The reason is simple. If you run code first, the computer does the thinking and you just read the answer. If you predict first, you have to build a mental model of what the code does, and a wrong prediction tells you exactly where that model is off. In CodeCoach this shows up as R1 trace questions, and as the habit of asking what a change will do before you try it.</p>
+
+<h2>Explain it in your own words</h2>
+<p>After you solve something, the coach often asks why it works: why this loop stops where it does, why that variable starts at zero. It doesn't accept "because the tests pass."</p>
+<p>This is self-explanation. In a classic study, students who were prompted to explain each line of a biology text to themselves understood it better than students who read it twice (<a href="https://education.asu.edu/lcl/publications/chi-m-t-h-de-leeuw-n-chiu-m-h-lavancher-c-1994-eliciting-self-explanations">Chi, de Leeuw, Chiu and LaVancher, 1994</a>). Explaining forces you to connect the new idea to what you already know, and it exposes the parts you only thought you understood.</p>
+<p>For code, a good self-explanation names the rule, not the line: "the index stops at length minus one because arrays start at zero" rather than "I wrote i &lt; length." When your explanation is vague, the coach asks a follow-up question instead of explaining it for you.</p>
+
+<h2>Struggle a little, on purpose</h2>
+<p>When you press <b>I'm stuck</b>, the coach doesn't hand you the answer. It gives the smallest hint that gets you moving: a question, then a pointer to the right idea, and only after that a partial example. You keep the work of putting it together.</p>
+<p>There's evidence that trying a problem before being taught the method can pay off. A meta-analysis of 53 studies found that problem solving followed by instruction led to better conceptual understanding and transfer than instruction followed by practice (<a href="https://journals.sagepub.com/doi/10.3102/00346543211019105">Sinha and Kapur, 2021</a>). The authors call this <em>productive failure</em>, and the word "productive" matters. It worked when students had enough prior knowledge to make a real attempt, and when a clear explanation followed that showed why their attempts fell short.</p>
+<p>So the struggle has limits. If you're stuck for several minutes with no progress, the hints get more concrete. And every struggle ends with an explanation, so a failed attempt turns into understanding instead of frustration.</p>
+
+<h2>Come back just before you'd forget</h2>
+<p>When you solve a topic, CodeCoach schedules it to come back: after 2 days, then 5, 12, 30 and 75. Each gap is about 2.5 times the last, capped at 180 days. Pass a review cleanly and the next gap grows. Need help and the gap stays the same. Fail and it's due again right away. The app computes these dates, so they're never miscounted.</p>
+<p class="gaps">review after <span>2 days</span>→<span>5</span>→<span>12</span>→<span>30</span>→<span>75</span></p>
+<p>Spacing is one of the most reliable findings in learning research. A review of 839 assessments from 317 experiments found that spreading study sessions out beats cramming them together, and that the best gap grows with how long you want to remember (<a href="https://www.yorku.ca/ncepeda/publications/CPVWR2006.html">Cepeda, Pashler, Vul, Wixted and Rohrer, 2006</a>). Remembering for a final exam needs longer gaps than remembering for tomorrow's quiz.</p>
+<p>A review in CodeCoach isn't rereading your notes. It's a fresh problem on the same topic, so you have to recall the idea, not recognize an old answer. The Today page shows what's due, so a ten-minute session can be just reviews.</p>
+
+<h2>Mix the topics</h2>
+<p>Textbooks practice one topic at a time: ten loop problems, then ten array problems. CodeCoach mixes them. A review session might give you a string problem, then a map problem, then a loop over an array, in an order you can't predict.</p>
+<p>In one experiment, students who practiced math problems mixed together did far better on a test a week later than students who practiced the same problems grouped by type (<a href="https://digitalcommons.usf.edu/psy_facpub/1767/">Rohrer and Taylor, 2007</a>). This is called <em>interleaving</em>. It feels harder while you practice, and that's the point.</p>
+<p>When every problem in a set uses the same tool, you never have to decide which tool to use. On an exam, or in real code, deciding is half the job. Mixed practice trains you to look at a problem and recognize what it needs: a loop, a map, recursion, or two pointers.</p>
+
+<h2>What CodeCoach doesn't do</h2>
+<p><b>It doesn't sort you into a learning style.</b> Many people believe they're "visual" or "hands-on" learners and should be taught that way. A major review looked for the evidence this needs, that teaching to your preferred style actually improves results, and found virtually none; several well-designed studies contradicted it (<a href="https://digitalcommons.usf.edu/psy_facpub/1765/">Pashler, McDaniel, Rohrer and Bjork, 2008</a>). What does differ between people is what they already know, so that's what CodeCoach adapts to. Your Learner Profile records things like which explanations clicked and where you tend to slip, not a style label.</p>
+<p><b>It doesn't write your graded work.</b> Each course has an AI policy in its notes. When a class doesn't allow AI-written code on homework or quizzes, the coach gives hints and explanations only. It never writes or fixes the code for a real assignment. You can practice the same skills on its own problems as much as you want.</p>
+<p><b>It doesn't keep you on easy work.</b> Getting every problem right feels good, but if nothing is hard, you're not learning much. The ladder keeps pushing you up until you meet problems you can just barely solve.</p>
+
+<h2>The limits, and how to try it</h2>
+<p>The research above is solid, but it has edges worth knowing:</p>
+<ul>
+<li><b>Most of it wasn't done with an AI coach.</b> These studies used teachers, textbooks and fixed practice sets. CodeCoach applies the same methods with an AI, which can make mistakes. That's why every coding problem's reference solution is tested against its own tests before you ever see it.</li>
+<li><b>Some of it comes from other subjects.</b> The spacing review used verbal recall, the interleaving study used math, and the self-explanation study used biology. The principles carry over well to programming, but the exact numbers may not.</li>
+<li><b>The schedule is a starting point.</b> The 2 → 5 → 12 → 30 → 75 day gaps follow the research's pattern, not a precise optimum for you. CodeCoach adjusts them by how each review goes.</li>
+<li><b>CodeCoach hasn't been studied yet.</b> Nobody has measured its outcomes in a controlled trial. You can track your own, though: the Outcomes card records your learning gain on each topic, what you still remember 30, 60 and 90 days later, and how you do on problems in new contexts.</li>
+</ul>
+<p><b>Try it.</b> CodeCoach is free and open source, for Mac, Windows and Linux. Your notes live in a plain folder you own, and you choose the AI, including free ones that run on your own computer.</p>
+<p><a class="btn primary" href="./#download">Download CodeCoach</a></p>
+
+<h2>References</h2>
+<ul class="refs">
+<li>Cepeda, N. J., Pashler, H., Vul, E., Wixted, J. T., &amp; Rohrer, D. (2006). Distributed practice in verbal recall tasks: A review and quantitative synthesis. <i>Psychological Bulletin, 132</i>, 354–380. <a href="https://www.yorku.ca/ncepeda/publications/CPVWR2006.html">Abstract</a></li>
+<li>Chi, M. T. H., de Leeuw, N., Chiu, M.-H., &amp; LaVancher, C. (1994). Eliciting self-explanations improves understanding. <i>Cognitive Science, 18</i>, 439–477. <a href="https://education.asu.edu/lcl/publications/chi-m-t-h-de-leeuw-n-chiu-m-h-lavancher-c-1994-eliciting-self-explanations">Listing</a></li>
+<li>Ericson, B. J., Margulieux, L. E., &amp; Rick, J. (2017). Solving Parsons problems versus fixing and writing code. <i>Koli Calling 2017</i>. <a href="https://dl.acm.org/doi/10.1145/3141880.3141895">ACM</a> · <a href="https://computinged.wordpress.com/2017/11/17/parsons-problems-have-same-learning-gains-as-writing-or-fixing-code-in-less-time-koli-calling-2017-preview/">summary</a></li>
+<li>Kalyuga, S., Ayres, P., Chandler, P., &amp; Sweller, J. (2003). The expertise reversal effect. <i>Educational Psychologist, 38</i>(1), 23–31. <a href="https://ro.uow.edu.au/edupapers/136">Repository</a></li>
+<li>Pashler, H., McDaniel, M., Rohrer, D., &amp; Bjork, R. (2008). Learning styles: Concepts and evidence. <i>Psychological Science in the Public Interest, 9</i>(3), 105–119. <a href="https://digitalcommons.usf.edu/psy_facpub/1765/">Repository</a></li>
+<li>Rohrer, D., &amp; Taylor, K. (2007). The shuffling of mathematics problems improves learning. <i>Instructional Science, 35</i>(6), 481–498. <a href="https://digitalcommons.usf.edu/psy_facpub/1767/">Repository</a></li>
+<li>Sentance, S., Waite, J., &amp; Kallia, M. (2019). Teaching computer programming with PRIMM: A sociocultural perspective. <i>Computer Science Education</i>. doi:10.1080/08993408.2019.1608781. <a href="https://qmro.qmul.ac.uk/xmlui/handle/123456789/57800">Repository</a></li>
+<li>Sinha, T., &amp; Kapur, M. (2021). When problem solving followed by instruction works: Evidence for productive failure. <i>Review of Educational Research</i>. doi:10.3102/00346543211019105. <a href="https://journals.sagepub.com/doi/10.3102/00346543211019105">Journal</a></li>
+</ul>
+</main>
+<footer><div class="wrap">❯ codecoach · your files, your model, your pace</div></footer>
+</body>
+</html>

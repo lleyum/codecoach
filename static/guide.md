@@ -17,6 +17,8 @@ CodeCoach is your personal coding tutor and practice space in one app. An AI coa
 
 ## How CodeCoach teaches (and why)
 
+*The full story, with the research and its limits: [How CodeCoach teaches](https://lleyum.github.io/codecoach/how-it-teaches.html).*
+
 Learning to code is two skills at once: **understanding** (what the code should do, which pattern fits) and **fluency** (writing it correctly from memory, fast). Most courses teach the first and hope the second happens. CodeCoach trains both, on purpose, using techniques that research on learning and on programming education supports.
 
 ### The ladder (R0 to R6)
@@ -100,6 +102,7 @@ Your home screen - it answers "what should I do now?".
    - **Drill** - lots of problems on topics you know, mixed. Little explaining.
    - **Quiz sim** - a timed practice test in your class's format. No hints until the end.
    - **Review** - only what's due today, mixed.
+   - **Exam** - a whole practice exam, taken like the real thing (see *Practice exams* below).
 2. **Topic** (optional): type one, pick a suggestion, or press **Next on roadmap**. Leave it empty and your coach suggests one.
 3. **Materials** (optional): tick class content to study from. Your coach teaches in your class's style and makes *new* problems based on it.
 4. **Paste** (optional): a practice quiz with your answers, feedback, an assignment prompt... (tick "Save to Materials" to keep it).
@@ -135,6 +138,18 @@ Three layers: the **problem** on top, **your code** in the middle, the **test ou
 - **Problem tabs:** all problems from the session stay open; only the one on screen counts time.
 
 Every problem is checked before you see it: the coach's own solution must pass its tests, and the starting code must fail them. You'll never get a broken problem.
+
+### Practice exams
+
+Pick **Exam**, set the minutes and how many multiple-choice and coding questions you want, and type the topics (or leave them empty to cover what's due and what your class tests). Then:
+
+1. **Building:** your coach writes the whole exam at once and CodeCoach checks every coding problem against its own tests. This takes a minute or two.
+2. **Start:** the clock starts. With **Lockdown** on, CodeCoach goes full screen and hides the sidebar, coach and Playground. Run tests as often as you like, but you only see how many pass.
+3. **The clock is real:** it keeps running if you leave or close CodeCoach, and at 0:00 the exam is submitted for you. Leaving the window or full screen isn't blocked; it's written in your report so you can be honest with yourself.
+4. **Grading** happens on your computer: multiple choice right or wrong, coding problems get points × the share of tests that pass.
+5. **Report and debrief:** a report goes to your course's `exams/` folder (score, time on each question, your code, failing tests, model solutions, the integrity log). Then your coach goes through what you missed and updates your tracker.
+
+No AI runs during the exam: building it costs about as much as a few coach messages, and taking it costs nothing.
 
 ### Timers and pausing
 
@@ -179,7 +194,7 @@ Use it for quick experiments ("what does this print?"), checking syntax, or prac
 
 Every note CodeCoach keeps is a Markdown file in your Library. Read and edit them here, or press **Open file** to open one in your usual editor (and **Obsidian** if you have it).
 
-- **Overview** - every topic's level (click to practice; ● = review due), Toolkit progress, all sessions.
+- **Overview** - every topic's level (click to practice; ● = review due), Toolkit progress, **Outcomes**, all sessions.
 - **Roadmap** - the plan in order. Tick boxes right here; hover an item for **Learn**.
 - **Mastery** (Mastery Tracker) - each topic's rung, mastered or not, last practiced, next review.
 - **Toolkit** - the one-line building blocks you need (e.g. `map.getOrDefault(k, 0)`), each *new / shaky / solid*. Shared by all courses in the same language.
@@ -188,6 +203,14 @@ Every note CodeCoach keeps is a Markdown file in your Library. Read and edit the
 - **Blueprint** - what your class's tests look like (format, rules, traps).
 - **Course profile** - how the course works: goal, assessments, next quiz date, AI policy, code format, target minutes. Keep "Next assessment" current so your coach plans around it.
 - **Learner profile** - how *you* learn best (see above). Shared by every course.
+
+**Outcomes** measure what studying has actually done, from your own work (`Outcomes.md` in the course folder):
+
+- **Learning gain** - before your coach teaches a new topic it gives one short check problem (it's fine to get stuck), and after you master the topic one more like it. The gain is how much of what you didn't know you now can do.
+- **Retention** - 30, 60 and 90 days after you master a topic, a review includes one fresh problem on it. Solved without hints = kept.
+- **Transfer** - now and then a problem uses a pattern you know in a new kind of situation.
+- **Speed and independence** - minutes, hints and first-try rate on R5/R6 problems, month by month, and your practice exam scores.
+- **Export CSV** saves every logged result as a spreadsheet file on your computer. Nothing is ever sent anywhere.
 
 Your coach also writes a **session note** for every session (`sessions/` in the course folder) and saves your solutions (`practice/`).
 

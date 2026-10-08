@@ -8,6 +8,7 @@
     drill: { label: "Drill", icon: "bolt", desc: "Lots of problems on topics you know" },
     quizsim: { label: "Quiz sim", icon: "timer", desc: "Timed practice test, no hints" },
     review: { label: "Review", icon: "refresh", desc: "Only what's due today (spaced review)" },
+    exam: { label: "Exam", icon: "list", desc: "A whole practice exam, built up front, timed, no help" },
   };
   CC.MODES = MODES;
   const QUICK = ["Hint please", "Explain that differently", "Show me an example", "Give me another one", "Harder", "Easier", "Why does that work?"];
@@ -44,7 +45,9 @@
     pauseClocks(true);
     const s = S.session;
     // browsers cap "while closing" requests at 64 KB, so send only what changes second to second
-    const body = JSON.stringify({ id: s.id, rev: s.rev || 0, paused: s.paused, timer: s.timer || null,
+    const ex = s.exam && s.exam.phase === "running" ? s.exam : null;
+    const body = JSON.stringify({ id: s.id, rev: s.rev || 0, paused: s.paused,
+      exam: ex ? { answers: ex.answers, codes: ex.codes, timeOn: ex.timeOn, away: ex.away, fsExits: ex.fsExits, current: ex.current, runs: ex.runs } : undefined, timer: s.timer || null,
       problems: s.problems.map((p) => ({ id: p.id, code: p.code, activeMs: p.activeMs, runningSince: p.runningSince, status: p.status, solvedIn: p.solvedIn, runs: p.runs, hints: p.hints })) });
     try {
       fetch("/api/session/patch", { method: "POST", keepalive: body.length < 60000, headers: { "X-CC-Token": window.CC_TOKEN, "Content-Type": "application/json" }, body }).catch(() => {});
@@ -106,10 +109,13 @@
     const modes = h("div", { class: "modes" });
     Object.keys(MODES).forEach((k) => {
       const b = h("button", { class: "mode" + (k === mode ? " on" : ""), html: CC.icon(MODES[k].icon) + "<div><b>" + MODES[k].label + "</b><span>" + MODES[k].desc + "</span></div>" });
-      b.onclick = () => { mode = k; modes.querySelectorAll(".mode").forEach((x) => x.classList.remove("on")); b.classList.add("on"); };
+      b.onclick = () => { mode = k; modes.querySelectorAll(".mode").forEach((x) => x.classList.remove("on")); b.classList.add("on"); examCard.classList.toggle("hidden", k !== "exam"); };
       modes.appendChild(b);
     });
     left.appendChild(h("div", { class: "card stack" }, h("div", { class: "label", text: "Session type" }), modes));
+    const examCard = CC.exam ? CC.exam.setupCard(c) : h("div");
+    examCard.classList.toggle("hidden", mode !== "exam");
+    left.appendChild(examCard);
 
     // topic
     const topic = h("input", { type: "text", list: "topicSuggest", placeholder: "Optional - e.g. Maps, Week 6: Sets, recursion. Leave empty and the coach suggests one.", value: opts.topic || "" });
@@ -160,7 +166,9 @@
         const r = await CC.api("/api/materials/save", { folder: c.folder, unit: "Pasted", title: (topic.value.trim() || MODES[mode].label) + " - " + CC.today(), type: ptype.value, content: pasted });
         if (!r.error) { paths.push(r.path); pasted = ""; }
       }
-      await startSession(mode, topic.value.trim(), paths, pasted);
+      if (mode === "exam") await CC.exam.start(topic.value.trim(), paths, pasted, examCard.read());
+      else await startSession(mode, topic.value.trim(), paths, pasted);
+      startBtn.disabled = false;
     };
     left.appendChild(h("div", { class: "row end" }, h("span", { class: "hint", html: "Tip: <kbd>⌘</kbd><kbd>Enter</kbd> runs code, <kbd>⌘</kbd><kbd>⇧</kbd><kbd>Enter</kbd> submits" }), h("span", { class: "spacer" }), startBtn));
 
@@ -196,8 +204,9 @@
   const sessionShown = () => chat && document.body.contains(chat) && S.session && chat.dataset.sid === S.session.id;
   function renderSession() {
     const v = view();
-    v.innerHTML = "";
     const s = S.session;
+    if (s.exam && s.exam.phase !== "graded" && CC.exam) { chat = null; return CC.exam.render(); }
+    v.innerHTML = "";
     CC.local.set("openSession", s.id);      // a reload (or macOS restarting the page) reopens this session
     const title = h("div", { class: "title", text: s.title, title: "Click to rename" });
     title.onclick = async () => {
@@ -364,6 +373,7 @@
       case "ask": return askCard(it, null);
       case "drill": return drillCard(it, null);
       case "parsons": return parsonsCard(it, null);
+      case "exam-report": return CC.exam ? CC.exam.reportCard(it) : null;
       case "problem": return h("div", { class: "tcard" }, h("div", { class: "kind", html: CC.icon("code") + " Problem · R" + CC.esc(it.rung) }),
         h("div", { class: "row" }, h("b", { class: "mono", text: it.name }), h("span", { class: "chip", text: it.topic || "" }), h("span", { class: "spacer" }),
           h("button", { class: "btn sm", html: CC.icon("arrow") + " Open", onclick: () => { showWorkspace(); selectProblem(it.id); } })));
@@ -622,7 +632,9 @@
     { type: "function", function: { name: "give_problem", description: "Give an R2-R6 coding problem in the student's editor. Reference is tested first; rejected if it fails or if the starter already passes. After success, STOP and wait for the result message.",
       parameters: { type: "object", properties: { name: { type: "string" }, topic: { type: "string", description: "Tracker topic" }, rung: { type: "integer", minimum: 2, maximum: 6 },
         pattern: { type: "string" }, statement: { type: "string", description: "Markdown statement with examples, in the course's style" }, starter_code: { type: "string" },
-        reference_solution: { type: "string" }, test_code: { type: "string" }, max_changed_lines: { type: "integer", description: "R4 debug only" }, time_limit_min: { type: "integer" } },
+        reference_solution: { type: "string" }, test_code: { type: "string" }, max_changed_lines: { type: "integer", description: "R4 debug only" }, time_limit_min: { type: "integer" },
+        purpose: { type: "string", enum: ["practice", "pre", "post", "retention", "transfer"], description: "Outcome tracking: pre = check before teaching a new topic, post = parallel check after mastery, retention = 30/60/90-day check, transfer = new context. Default practice." },
+        window: { type: "integer", description: "retention only: 30, 60 or 90" } },
         required: ["name", "topic", "rung", "statement", "starter_code", "reference_solution", "test_code"] } } },
     { type: "function", function: { name: "start_timer", description: "Visible countdown (quiz sims, timed problems).",
       parameters: { type: "object", properties: { minutes: { type: "number" }, label: { type: "string" } }, required: ["minutes"] } } },
@@ -725,6 +737,7 @@
       if (st.ok) return { error: "Problem rejected: the starter code already passes every test. The starter must be incomplete (or, for R4, contain a bug a test catches)." };
       const pr = { id: "p" + Date.now().toString(36), name: a.name, topic: a.topic, rung: a.rung, pattern: a.pattern || "", statement: a.statement,
         starter: a.starter_code, tests: a.test_code, maxChanged: a.max_changed_lines || null, timeLimit: a.time_limit_min || null,
+        purpose: a.purpose || "practice", window: a.window || null,
         code: a.starter_code, startedAt: Date.now(), activeMs: 0, runningSince: null, runs: 0, hints: 0, status: "open", lastResult: null };
       S.session.problems.push(pr);
       addItem({ kind: "problem", id: pr.id, name: pr.name, rung: pr.rung, topic: pr.topic });
@@ -1022,6 +1035,8 @@
     runAgent();
   }
   CC.sendToCoach = sendUser;
+  CC.study = { saveNow, scheduleSave, renderSession, renderStart: (o) => renderStart(o), leaveSession, sendUser, addItem, fenceLang,
+    newId: () => newId(), MODES, view, editorRef: () => editor };
 
   // ================================================================== sessions
   const newId = () => CC.today() + "-" + Math.random().toString(36).slice(2, 8);
@@ -1066,6 +1081,12 @@
     if (s.error) { if (!opts.quiet) CC.toast(s.error, true); return; }
     s.usage = s.usage || { cost: 0, tokens: 0 }; s.display = s.display || []; s.problems = s.problems || [];
     S.session = s; S.sys = null; S.pending = null;
+    if (s.exam && s.exam.phase !== "graded" && CC.exam) {
+      const c0 = (S.state.courses || []).find((x) => x.folder === s.course.folder);
+      if (c0) { S.course = c0; CC.$("courseSelect").value = c0.folder; CC.local.set("course", c0.folder); }
+      if (S.view !== "study") { CC.go("study", { keep: true }); return; }     // showing the view renders the exam
+      return CC.exam.resume();
+    }
     const c = (S.state.courses || []).find((x) => x.folder === s.course.folder);
     if (c && (!S.course || S.course.folder !== c.folder)) { S.course = c; CC.$("courseSelect").value = c.folder; CC.local.set("course", c.folder); }
     const upd = Math.min(Date.now(), Date.parse(s.updated || "") || Date.now());
@@ -1344,13 +1365,20 @@
     if (document.hidden) { hiddenAt = Date.now(); saveCodeSoon(); return; }
     if (S.session) { tickClock(); checkRemoteChange(); }
     const s = S.session, gap = hiddenAt ? Date.now() - hiddenAt : 0; hiddenAt = null;
-    if (!s || s.paused || gap < 5 * 60000) return;
+    if (!s || s.paused || s.exam || gap < 5 * 60000) return;
     s.problems.forEach((p) => { if (p.runningSince) p.runningSince += gap; });
     if (s.timer && !s.timer.fired && s.timer.end) s.timer.end += gap;
     else if (s.timer && s.timer.fired && !s.problems.some((p) => p.status === "open")) return;
     scheduleSave(0);
     CC.toast("Welcome back - the " + Math.round(gap / 60000) + " min you were away didn't count on the timers.");
   });
+
+  // every finished coding problem is one line in the course's Outcomes.md (learning gain, retention, transfer, trends)
+  function logOutcome(p, solved) {
+    const r = p.lastResult || {};
+    CC.api("/api/outcome/log", { folder: S.session.course.folder, event: { type: "problem", purpose: p.purpose || "practice", window: p.window || undefined,
+      topic: p.topic, name: p.name, rung: p.rung, solved, passed: solved ? r.total : (r.passed || 0), total: r.total || null, hints: p.hints, runs: p.runs, ms: Math.round(elapsedMs(p)) } });
+  }
 
   async function submitCurrent() {
     const p = curProblem(); if (!p || S.busy || p.status !== "open") return;
@@ -1359,6 +1387,7 @@
     if (!r.ok) { CC.toast(r.stage === "compile" ? "It doesn't compile yet." : "Not all tests pass yet - keep going, or press I'm stuck."); return; }
     if (p.status !== "open") return;
     freezeProblem(p); p.status = "solved"; p.solvedIn = elapsed(p);
+    logOutcome(p, true);
     setTimeout(() => { CC.sfx && CC.sfx.play("solve"); CC.celebrate && CC.celebrate($("pStatement") || document.body, true); }, 120);
     renderProblemTabs(); selectProblem(p.id);
     CC.api("/api/note/save_practice", { folder: S.session.course.folder, topic: p.topic, name: p.name, language: L(), statement: p.statement, code: p.code, result: "solved in " + p.solvedIn + ", " + p.runs + " runs, " + p.hints + " hints" });
@@ -1378,6 +1407,7 @@
     const p = curProblem(); if (!p || S.busy) return;
     if (!(await CC.confirm("Give up on " + p.name + "?", "Your coach will walk you through a solution. No shame - it's how you learn the pattern.", "Give up"))) return;
     p.code = editor.get(); freezeProblem(p); p.status = "gave up";
+    logOutcome(p, false);
     renderProblemTabs(); selectProblem(p.id);
     CC.api("/api/note/save_practice", { folder: S.session.course.folder, topic: p.topic, name: p.name, language: L(), statement: p.statement, code: p.code, result: "gave up after " + elapsed(p) });
     sendUser("[GAVE UP] " + p.name + " (R" + p.rung + ", " + p.topic + ") after " + elapsed(p) + ". My last code:\n" + fence(p.code), "Gave up on " + p.name);

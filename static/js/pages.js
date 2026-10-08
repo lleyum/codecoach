@@ -101,6 +101,7 @@
       right.appendChild(h("div", { class: "card" }, h("h3", { html: icon("bolt") + "Quick start" }), h("div", { class: "quick" },
         btn("Syntax drills", "bolt", () => CC.go("study", { fresh: true, mode: "drill" }), "sm"),
         btn("Quiz simulation", "timer", () => CC.go("study", { fresh: true, mode: "quizsim" }), "sm"),
+        btn("Practice exam", "list", () => CC.go("study", { fresh: true, mode: "exam" }), "sm"),
         btn("Playground", "code", () => CC.go("playground"), "sm"),
         btn("Materials", "folder", () => CC.go("materials"), "sm"),
         btn("Notes", "book", () => CC.go("progress"), "sm")),
@@ -793,6 +794,45 @@
     if (total) body.prepend(h("div", { class: "rm-progress" }, h("div", { class: "bar done" }, h("span", { style: { width: Math.round(doneN / total * 100) + "%" } })),
       h("span", { class: "tiny muted", text: doneN + " of " + total + " done" })));
   }
+  // what studying has actually done: learning gain, retention, transfer, trends (Outcomes.md in the course folder)
+  async function outcomesCard() {
+    const o = await CC.api("/api/outcomes", { folder: S.course.folder });
+    const card = h("div", { class: "card outcomes" }, h("h3", { html: icon("chart") + "Outcomes" }));
+    if (o.error) { card.appendChild(h("p", { class: "muted small", text: o.error })); return card; }
+    const pct = (x) => (x == null ? "-" : Math.round(100 * x) + "%");
+    if (!o.events) {
+      card.appendChild(h("p", { class: "muted small", text: "Nothing measured yet. Every coding problem you finish is recorded here: how much you gained on a topic from before it was taught to after mastery, what you still remember 30, 60 and 90 days later, and whether you can use it in new problems." }));
+      return card;
+    }
+    const tile = (big, label, tip) => h("div", { class: "o-tile", title: tip }, h("b", { text: big }), h("span", { text: label }));
+    card.appendChild(h("div", { class: "o-tiles" },
+      tile(pct(o.avg_gain), "learning gain", "Pre-check before teaching vs. a parallel post-check after mastery (normalized gain)"),
+      tile(pct(o.retention_rate), "retention", "Mastered topics still solved without hints 30/60/90 days later"),
+      tile(o.transfer.n ? pct(o.transfer.ok / o.transfer.n) : "-", "transfer", "Problems in new contexts solved without hints"),
+      tile(String(o.problems), "problems", "Coding problems finished or given up")));
+    if ((o.due || []).length) card.appendChild(h("p", { class: "small", text: "Retention checks due: " + o.due.map((d) => d[0] + " (" + d[1] + " days)").join(", ") + ". Your next Review session includes them." }));
+    const months = (o.months || []).slice(-3);
+    if (months.length) {
+      const t = h("table", { class: "o-table" }, h("tr", null, ["Month", "Solved", "Avg min", "Hints", "First try"].map((x) => h("th", { text: x }))));
+      months.forEach((m) => t.appendChild(h("tr", null, [m.month, m.n, m.avg_min, m.avg_hints, pct(m.first_try)].map((x) => h("td", { text: String(x) })))));
+      card.appendChild(t);
+    }
+    const last = (o.exams || []).slice(-1)[0];
+    if (last) card.appendChild(h("p", { class: "small muted", text: "Last practice exam: " + last.title + " · " + last.pct + "% (" + last.date + ")" }));
+    card.appendChild(h("div", { class: "row" },
+      btn("Open Outcomes.md", "file", () => CC.api("/api/open", { path: o.file }).then((x) => x.error && CC.toast(x.error, true)), "sm"),
+      btn("Export CSV", "download", async () => {
+        const r = await fetch("/api/outcomes/csv", { method: "POST", headers: { "X-CC-Token": window.CC_TOKEN, "Content-Type": "application/json" }, body: JSON.stringify({ folder: S.course.folder }) });
+        if (!r.ok) return CC.toast("Export failed (HTTP " + r.status + ")", true);
+        const blob = await r.blob();
+        const a = h("a", { href: URL.createObjectURL(blob), download: "CodeCoach outcomes - " + S.course.name + " - " + CC.today() + ".csv" });
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+        CC.toast("Saved the CSV to your Downloads folder. It stays on your computer unless you share it.");
+      }, "sm ghost")));
+    return card;
+  }
+
   async function drawOverview(inner) {
     const d = await CC.api("/api/dashboard?" + CC.q({ folder: S.course.folder }));
     const ss = await CC.api("/api/sessions?" + CC.q({ folder: S.course.folder }));
@@ -818,6 +858,7 @@
     right.appendChild(h("div", { class: "card" }, h("h3", { html: icon("bolt") + "Toolkit" }),
       h("p", { class: "small", style: { margin: 0 }, text: d.toolkit.total ? d.toolkit.solid + " of " + d.toolkit.total + " syntax lines solid · " + d.toolkit.weak + " to drill" : "Empty - syntax drills fill it in." }),
       d.toolkit.total ? h("div", { class: "bar done", style: { marginTop: "8px" } }, h("span", { style: { width: Math.round(d.toolkit.solid / Math.max(1, d.toolkit.total) * 100) + "%" } })) : null));
+    right.appendChild(await outcomesCard());
     const sc = h("div", { class: "card" }, h("h3", { html: icon("chat") + "All sessions" }));
     const sessions = (ss.sessions || []);
     if (!sessions.length) sc.appendChild(h("p", { class: "muted small", text: "None yet." }));

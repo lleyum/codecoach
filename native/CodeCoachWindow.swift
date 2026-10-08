@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         buildMenu()
         let cfg = WKWebViewConfiguration()
         let ucc = WKUserContentController()
-        ucc.addUserScript(WKUserScript(source: "document.documentElement.classList.add('cc-native'); window.CC_NATIVE = true; window.CC_NATIVE_V = 2;",
+        ucc.addUserScript(WKUserScript(source: "document.documentElement.classList.add('cc-native'); window.CC_NATIVE = true; window.CC_NATIVE_V = 3;",
                                        injectionTime: .atDocumentStart, forMainFrameOnly: true))
         ucc.add(self, name: "cc")
         cfg.userContentController = ucc
@@ -182,6 +182,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             flushed = true
             NSApp.terminate(nil)
         }
+        if let fs = d["fullscreen"] as? Bool, window.styleMask.contains(.fullScreen) != fs {   // exam lockdown
+            window.toggleFullScreen(nil)
+        }
         if let st = d["stats"] as? String { lastStats = st }                 // page size snapshot, sent every few minutes
         if let err = d["jsError"] as? String { logEvent("page error: " + String(err.prefix(400))) }
         if let prompt = d["pickFolder"] as? String {
@@ -199,6 +202,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 self.web.evaluateJavaScript("window.CC && CC._folderPicked && CC._folderPicked(\(json)[0])", completionHandler: nil)
             }
         }
+    }
+
+    // full screen left with the green button or Esc: the page notes it during an exam
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        web.evaluateJavaScript("window.CC && CC._nativeFullscreen && CC._nativeFullscreen(true)", completionHandler: nil)
+    }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        web.evaluateJavaScript("window.CC && CC._nativeFullscreen && CC._nativeFullscreen(false)", completionHandler: nil)
     }
 
     // ---------------------------------------------------------------- navigation: keep CodeCoach inside, open everything else outside
