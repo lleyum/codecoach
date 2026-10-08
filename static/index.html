@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CodeCoach</title>
+<link rel="icon" href="/static/icon.png">
+<link rel="stylesheet" href="/static/css/fonts.css">
+<link rel="stylesheet" href="/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/vendor/cm-dialog.min.css">
+<link rel="stylesheet" href="/static/css/app.css">
+<script>
+  window.CC_TOKEN = "{{TOKEN}}"; window.CC_VERSION = "{{VERSION}}";
+  // paint the last theme instantly (no flash) - core.js re-applies it properly
+  try { var tv = JSON.parse(localStorage.getItem("cc_theme_vars") || "null"); if (tv) { var r = document.documentElement; for (var k in tv.v) r.style.setProperty("--" + k, tv.v[k]); r.dataset.theme = tv.dark ? "dark" : "light"; r.style.colorScheme = tv.dark ? "dark" : "light"; } } catch (e) {}
+</script>
+</head>
+<body>
+<aside class="side">
+  <div class="brand"><div class="logo" id="logoIcon"></div><span class="name">CodeCoach</span></div>
+  <div class="course-switch">
+    <select id="courseSelect" title="Course"></select>
+    <button class="btn icon ghost" id="newCourseBtn" title="New course or learning track"></button>
+  </div>
+  <nav class="nav" id="nav">
+    <button data-view="today"><span data-icon="home"></span><span class="label-text">Today</span></button>
+    <button data-view="study"><span data-icon="chat"></span><span class="label-text">Study</span><span class="badge hidden" id="studyBadge">live</span></button>
+    <button data-view="materials"><span data-icon="folder"></span><span class="label-text">Materials</span></button>
+    <button data-view="playground"><span data-icon="code"></span><span class="label-text">Playground</span></button>
+    <button data-view="progress"><span data-icon="chart"></span><span class="label-text">Progress</span></button>
+  </nav>
+  <div class="side-foot">
+    <div class="model" title="AI model"><span data-icon="spark"></span><select id="modelSelect"></select></div>
+    <div class="usage" id="usageLine"></div>
+    <div class="nav">
+      <button data-view="welcome" id="welcomeBtn"><span data-icon="logo"></span><span class="label-text">Welcome</span></button>
+      <button data-view="guide" id="guideBtn"><span data-icon="help"></span><span class="label-text">How to use</span></button>
+      <button id="muteBtn" title="Mute / unmute sounds (Shift+Cmd+M)"><span data-icon="volume"></span><span class="label-text">Sound on</span></button>
+      <button id="themesBtn"><span data-icon="palette"></span><span class="label-text">Themes</span></button>
+      <button id="settingsBtn"><span data-icon="gear"></span><span class="label-text">Settings</span></button>
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+  <section class="view" id="view-today"></section>
+  <section class="view hidden" id="view-study"></section>
+  <section class="view hidden" id="view-materials"></section>
+  <section class="view hidden" id="view-playground"></section>
+  <section class="view hidden" id="view-progress"></section>
+  <section class="view hidden" id="view-guide"></section>
+  <section class="view hidden" id="view-welcome"></section>
+</main>
+
+<div id="modal" class="modal hidden"></div>
+<div class="toasts" id="toasts"></div>
+
+<script src="/vendor/codemirror.min.js"></script>
+<script src="/vendor/cm-clike.min.js"></script>
+<script src="/vendor/cm-python.min.js"></script>
+<script src="/vendor/cm-javascript.min.js"></script>
+<script src="/vendor/cm-go.min.js"></script>
+<script src="/vendor/cm-simple.min.js"></script>
+<script src="/vendor/cm-rust.min.js"></script>
+<script src="/vendor/cm-matchbrackets.min.js"></script>
+<script src="/vendor/cm-closebrackets.min.js"></script>
+<script src="/vendor/cm-comment.min.js"></script>
+<script src="/vendor/cm-active-line.min.js"></script>
+<script src="/vendor/cm-searchcursor.min.js"></script>
+<script src="/vendor/cm-dialog.min.js"></script>
+<script src="/vendor/cm-search.min.js"></script>
+<script src="/vendor/cm-runmode.min.js"></script>
+<script src="/static/js/themes.js"></script>
+<script src="/static/js/md.js"></script>
+<script src="/static/js/core.js"></script>
+<script src="/static/js/sound.js"></script>
+<script src="/static/js/study.js"></script>
+<script src="/static/js/pages.js"></script>
+<script>CC.init();</script>
+</body>
+</html>

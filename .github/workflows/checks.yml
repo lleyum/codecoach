@@ -1,0 +1,17 @@
+# Quick checks on every push: the server compiles on old and new Python, the JavaScript parses.
+name: Checks
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.8", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m py_compile server.py packaging/fetch_vendor.py packaging/stage.py packaging/smoke_test.py
+      - run: for f in static/js/*.js; do node --check "$f"; done
+      - run: bash -n launch.sh && bash -n packaging/macos/build.sh && bash -n packaging/linux/build.sh

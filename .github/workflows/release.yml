@@ -1,0 +1,111 @@
+# Builds the downloadable apps on GitHub's machines. Push a tag like v3.0.0 to publish a release:
+#   git tag v3.0.0 && git push origin v3.0.0
+# (Actions tab > "Build apps" > Run workflow also builds them without releasing - grab them from the run's artifacts.)
+name: Build apps
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+env:
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+jobs:
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false          # one Mac build failing shouldn't cancel the other
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CodeCoach.app + .dmg
+        env:
+          ARCH: ${{ matrix.arch }}
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash packaging/macos/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/*.dmg
+      - name: Check the signature
+        run: codesign --verify --deep --strict --verbose=2 dist/CodeCoach.app
+      - name: Smoke test (bundled Python + server; the window itself needs a screen)
+        run: |
+          APP=dist/CodeCoach.app/Contents/Resources
+          if [ "${{ matrix.arch }}" = "arm64" ]; then RUN=""; else RUN="arch -x86_64"; fi
+          if [ -n "$RUN" ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "::warning::Rosetta isn't available on this runner - skipping the Intel smoke test"; exit 0
+          fi
+          python3 packaging/smoke_test.py -- $RUN "$APP/python/bin/python3" -B "$APP/app/server.py"
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Inno Setup 6.3+ (installer builder)
+        shell: pwsh
+        run: choco upgrade innosetup -y --no-progress   # installs or updates; the installer script needs 6.3 or newer
+      - name: Build CodeCoach.exe, zip and installer
+        shell: pwsh
+        run: ./packaging/windows/build.ps1 -Repo "${{ github.repository }}" -Version "${{ env.VERSION }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/CodeCoach-Windows.zip
+            dist/CodeCoach-Windows-Setup.exe
+      - name: Smoke test (bundled Python + server + launcher present)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist\CodeCoach-Windows\CodeCoach.exe)) { throw "CodeCoach.exe wasn't built" }
+          if (-not (Test-Path dist\CodeCoach-Windows\python\pythonw.exe)) { throw "pythonw.exe is missing" }
+          python packaging\smoke_test.py -- dist\CodeCoach-Windows\python\python.exe -B dist\CodeCoach-Windows\app\server.py
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tarball
+        env:
+          REPO: ${{ github.repository }}
+        run: bash packaging/linux/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/CodeCoach-Linux.tar.gz
+      - name: Smoke test
+        run: |
+          mkdir -p "$RUNNER_TEMP/lx" && tar -xzf dist/CodeCoach-Linux.tar.gz -C "$RUNNER_TEMP/lx"
+          python3 packaging/smoke_test.py -- python3 -B "$RUNNER_TEMP/lx/CodeCoach/app/server.py"
+
+  release:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
+          body: |
+            **Download for your computer**
+            - **Mac (Apple Silicon - M1/M2/M3/M4/M5):** CodeCoach-macOS-AppleSilicon.dmg
+            - **Mac (Intel):** CodeCoach-macOS-Intel.dmg
+            - **Windows:** CodeCoach-Windows-Setup.exe (or the portable CodeCoach-Windows.zip)
+            - **Linux:** CodeCoach-Linux.tar.gz, then run `./install.sh`
+
+            First launch on a Mac: if macOS says CodeCoach can't be opened, go to System Settings > Privacy & Security > Open Anyway (the app isn't notarized by Apple yet).
+            Your data stays in your own Library folder - updating never touches it.

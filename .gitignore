@@ -1,0 +1,8 @@
+dist/
+static/vendor/
+static/build.json
+__pycache__/
+*.pyc
+.DS_Store
+_old_v1/
+data/

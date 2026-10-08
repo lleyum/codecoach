@@ -1,0 +1,25 @@
+#!/bin/bash
+# CodeCoach for Linux: start the local server (needs python3) and open CodeCoach in its own window.
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+PORT="${CODECOACH_PORT:-8765}"
+URL="http://127.0.0.1:$PORT/"
+PY="$(command -v python3 || true)"
+if [ -z "$PY" ]; then
+  msg="CodeCoach needs Python 3. Install it with your package manager (e.g. sudo apt install python3), then start CodeCoach again."
+  command -v zenity >/dev/null && zenity --error --text="$msg" || echo "$msg"
+  exit 1
+fi
+ping() { "$PY" -c "import urllib.request,sys;sys.exit(0 if b'\"ok\"' in urllib.request.urlopen('${URL}api/ping',timeout=1).read() else 1)" 2>/dev/null; }
+if ! ping; then
+  mkdir -p "$HOME/.codecoach"
+  CODECOACH_PACKAGED=linux nohup "$PY" -B "$HERE/app/server.py" --port "$PORT" --no-browser >"$HOME/.codecoach/server.log" 2>&1 &
+  for i in $(seq 1 60); do ping && break; sleep 0.25; done
+fi
+PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/codecoach/window"
+for b in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge brave-browser; do
+  if command -v "$b" >/dev/null 2>&1; then
+    mkdir -p "$PROFILE"
+    exec "$b" --app="$URL" --user-data-dir="$PROFILE" --window-size=1400,900 --no-first-run --class=CodeCoach >/dev/null 2>&1
+  fi
+done
+xdg-open "$URL" >/dev/null 2>&1 &

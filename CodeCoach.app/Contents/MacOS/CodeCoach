@@ -1,0 +1,9 @@
+#!/bin/bash
+# If macOS started us under Rosetta (Intel emulation), switch back to the native Apple Silicon mode.
+if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then exec /usr/bin/arch -arm64 /bin/bash "$0" "$@"; fi
+# CodeCoach.app: the app lives in the CodeCoach folder; find launch.sh next to it.
+APP="$(cd "$(dirname "$0")/../.." && pwd)"
+DIR="$(dirname "$APP")"
+if [ -f "$DIR/launch.sh" ]; then exec /bin/bash "$DIR/launch.sh" "$DIR" app; fi
+if [ -f "$HOME/.codecoach/app_path" ]; then D="$(cat "$HOME/.codecoach/app_path")"; [ -f "$D/launch.sh" ] && exec /bin/bash "$D/launch.sh" "$D" app; fi
+exec /bin/bash "$HOME/learn/CodeCoach/launch.sh" "$HOME/learn/CodeCoach" app
