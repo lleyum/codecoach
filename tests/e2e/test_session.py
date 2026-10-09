@@ -70,6 +70,45 @@ class SessionTest(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_quick_review(self):
+        with App() as app, sync_playwright() as p:
+            app.make_course("python", "Python track")
+            app.llm.reply("Key idea first.", tools=[("update_review_notes", {"topic": "Lists", "markdown": "- `len(xs)` counts items\n\n```python\nxs.append(4)\n```"}),
+                                                     ("give_problem", PROBLEM)])
+            app.llm.reply("Nice!", when="[PROBLEM RESULT]")
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            try:
+                page.goto(app.base + "/")
+                page.wait_for_selector("#view-today .stats", timeout=15000)
+                page.click("#nav button[data-view=study]")
+                page.click("#view-study >> text=Start session")
+                page.wait_for_selector("#pStatement >> text=greater than 0", timeout=15000)
+                page.click("#reviewBtn")
+                page.wait_for_selector("#reviewPanel >> text=counts items", timeout=10000)
+                page.wait_for_selector("#reviewPanel >> text=still open")
+                page.evaluate("(c) => document.querySelector('#pEditor .CodeMirror').CodeMirror.setValue(c)", SOLUTION)
+                page.click("#submitBtn")
+                page.wait_for_selector("#chat >> text=Nice!", timeout=20000)
+                page.wait_for_selector("#reviewPanel >> text=Your solution", timeout=10000)      # the panel followed the session
+                page.click("#view-study >> text=Close")
+                page.click("#view-study .card >> text=Open")
+                page.wait_for_selector("#view-review .rv-row >> text=Lists", timeout=10000)
+                page.click("#view-review .rv-row >> text=Lists")
+                page.wait_for_selector("#view-review .rv-md >> text=counts items", timeout=10000)
+                page.wait_for_selector("#view-review .rv-md >> text=countPositive")             # the saved solution
+                page.click("#view-review >> text=Sessions")
+                page.click("#view-review .rv-row >> nth=0")
+                page.wait_for_selector("#view-review .rv-md >> text=What you practiced", timeout=10000)
+                self.assertEqual(errors, [])
+            except Exception:
+                page.screenshot(path=os.path.join(os.environ.get("E2E_SHOTS", app.home), "e2e-failure.png"))
+                raise
+            finally:
+                browser.close()
+
     def test_change_on_another_computer(self):
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         import server

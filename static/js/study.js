@@ -15,7 +15,7 @@
 
   // ================================================================== save
   let saveTimer = null;
-  function scheduleSave(ms) { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, ms == null ? 800 : ms); }
+  function scheduleSave(ms) { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, ms == null ? 800 : ms); if (CC.review) CC.review.sessionChanged(); }
   let saveChain = Promise.resolve();
   // Typing in the editor: the code is copied to this computer's browser storage on every change (crash-safe), but the
   // session file - which sync tools re-upload as a whole - is written at most every 15 s, and right away on Run,
@@ -174,6 +174,9 @@
 
     // resume
     const list = h("div", { class: "list" });
+    right.appendChild(h("div", { class: "card stack" }, h("div", { class: "row" }, h("h3", { html: CC.icon("book") + " Quick review", style: { margin: 0 } }), h("span", { class: "spacer" }),
+      h("button", { class: "btn sm", text: "Open", onclick: () => CC.go("review") })),
+      h("p", { class: "muted small", style: { margin: 0 }, text: "A study sheet for any topic or past session: key ideas, syntax, patterns, mistakes and your code." })));
     right.appendChild(h("div", { class: "card" }, h("h3", { html: CC.icon("refresh") + " Resume" }), list));
     const rs = await CC.api("/api/sessions?" + CC.q({ folder: c.folder }));
     const sessions = rs.sessions || [];
@@ -183,6 +186,7 @@
         h("div", { class: "t" }, h("b", { text: s.title || "Session" }),
           h("span", { class: "tiny muted", text: (MODES[s.mode] ? MODES[s.mode].label : s.mode) + " · " + CC.fmtTime(s.updated) + (s.problems ? " · " + s.solved + "/" + s.problems + " solved" : "") + (s.versions ? " · " + (s.versions + 1) + " versions" : "") })),
         h("div", { class: "acts" },
+          h("button", { class: "btn icon ghost sm", title: "Review sheet", html: CC.icon("book"), onclick: (e) => { e.stopPropagation(); CC.go("review", { session: s.id }); } }),
           h("button", { class: "btn icon ghost sm", title: "Rename", html: CC.icon("edit"), onclick: async (e) => {
             e.stopPropagation();
             const t = await CC.prompt("Rename session", "Title", s.title);
@@ -217,10 +221,12 @@
     const pauseBtn = h("button", { class: "btn sm ghost", id: "pauseBtn", title: "Pause the timers while you step away" });
     const cost = h("span", { class: "chip", id: "costChip" });
     const wsToggle = h("button", { class: "btn icon ghost", title: "Show/hide workspace", html: CC.icon("panel") });
+    const rvBtn = h("button", { class: "btn sm ghost", id: "reviewBtn", title: "Review sheet: what this session covered so far (updates as you go)", html: CC.icon("book") + " Review" });
+    rvBtn.onclick = () => CC.review && CC.review.togglePanel(rvBtn);
     const endBtn = h("button", { class: "btn sm", html: CC.icon("flag") + " End session", title: "Get the end-of-session summary" });
     const closeBtn = h("button", { class: "btn sm ghost", html: CC.icon("x") + " Close", title: "Leave this session (it stays saved)" });
     v.appendChild(h("div", { class: "sess-bar" }, title, h("span", { class: "chip accent", text: MODES[s.mode] ? MODES[s.mode].label : s.mode }),
-      h("span", { class: "chip", text: s.course.name }), h("span", { class: "spacer" }), timer, pauseBtn, cost, wsToggle, endBtn, closeBtn));
+      h("span", { class: "chip", text: s.course.name }), h("span", { class: "spacer" }), timer, pauseBtn, cost, rvBtn, wsToggle, endBtn, closeBtn));
     v.appendChild(h("div", { class: "pause-banner hidden", id: "pauseBanner" }, h("span", { html: CC.icon("pause") }),
       h("span", { id: "pauseText", text: "Paused - timers are stopped." }), h("span", { class: "spacer" }),
       h("button", { class: "btn sm primary", html: CC.icon("play") + "<span>Resume</span>", onclick: () => { resumeClocks(); CC.sfx && CC.sfx.play("toggle"); } })));
@@ -331,6 +337,7 @@
     updateCost();
     scrollChat(true);
     $("studyBadge").classList.remove("hidden");
+    if (CC.local.get("reviewPanel", false) && CC.review) CC.review.togglePanel(rvBtn);
     setTimeout(() => input.focus(), 50);
   }
 
@@ -659,6 +666,8 @@
       parameters: { type: "object", properties: { name: { type: "string" }, markdown: { type: "string" } }, required: ["name", "markdown"] } } },
     { type: "function", function: { name: "append_blueprint", description: "Append findings about the class's assessment format to the Blueprint note.",
       parameters: { type: "object", properties: { markdown: { type: "string" } }, required: ["markdown"] } } },
+    { type: "function", function: { name: "update_review_notes", description: "Keep the student's review sheet for a topic current: the key ideas they'd reread before a quiz. 3-8 short bullets in plain words plus 1-2 small code examples in the course language. Replaces that topic's section, so include what's still true. Call after teaching a concept and when a problem shows something worth remembering.",
+      parameters: { type: "object", properties: { topic: { type: "string", description: "Tracker topic name" }, markdown: { type: "string" } }, required: ["topic", "markdown"] } } },
     { type: "function", function: { name: "update_roadmap", description: "Replace the whole Roadmap note (title, units, - [ ] / - [x] topic checklists). Keep existing checkmarks.",
       parameters: { type: "object", properties: { markdown: { type: "string" } }, required: ["markdown"] } } },
   ];
@@ -725,6 +734,7 @@
         addItem({ kind: "you", text: r.student_wrote }); noteAppend("**You:** " + r.student_wrote);
         return Object.assign({ skipped: true, student_message: r.student_wrote }, r.live_code ? { live_code: r.live_code } : {});
       }
+      it.correct = !!r.correct;
       addItem(it, { render: false });
       noteAppend(quote("[!example] Drill (R0)\n" + a.prompt + "\nTyped: `" + (r.answers || []).join("` | `") + "` - " + (r.correct ? "correct" : "missed") + "\nStandard: `" + a.reference_answer + "`"));
       scheduleSave();
@@ -797,6 +807,7 @@
         addItem({ kind: "you", text: r.student_wrote }); noteAppend("**You:** " + r.student_wrote);
         return Object.assign({ skipped: true, student_message: r.student_wrote }, r.live_code ? { live_code: r.live_code } : {});
       }
+      it.correct = !!r.correct;
       addItem(it, { render: false });
       noteAppend(quote("[!example] Parsons problem\n" + a.prompt + "\n\n" + (r.correct ? "Solved" : "Revealed") + " after " + r.attempts + " check(s)."));
       scheduleSave();
@@ -807,6 +818,7 @@
     async save_pattern(a) { return noteOp("/api/note/pattern", a, "Pattern Library · " + a.name, "brain"); },
     async append_blueprint(a) { return noteOp("/api/note/blueprint", a, "Blueprint updated", "file"); },
     async update_roadmap(a) { return noteOp("/api/note/roadmap", a, "Roadmap updated", "flag"); },
+    async update_review_notes(a) { const r = await noteOp("/api/note/review", a, "Review sheet · " + a.topic, "book"); CC.review && CC.review.invalidate(); return r; },
   };
 
   // ================================================================== streaming LLM

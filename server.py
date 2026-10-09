@@ -37,7 +37,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "3.2.0"
+VERSION = "3.3.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 VENDOR_DIR = os.path.join(STATIC_DIR, "vendor")
@@ -801,6 +801,7 @@ def course_files(folder):
         "mistakes": pick(lambda n: "mistakes" in n),
         "patterns": pick(lambda n: "pattern library" in n),
         "blueprint": pick(lambda n: "blueprint" in n),
+        "review": pick(lambda n: n.startswith("review notes")),
     }
     if not files["toolkit"]:
         m = re.search(r"\[\[([^\]]*Toolkit[^\]]*)\]\]", read_text(os.path.join(folder, "_course.md")))
@@ -2304,6 +2305,89 @@ def trim_notes(kind, text, terms, mode):
             return text, "%d blueprint sections unrelated to this session not shown (read_note blueprint to see all)" % n
     return text, ""
 
+# ---------------------------------------------------------------- quick review (a read-only study sheet per topic)
+# The coach keeps a short "key ideas" section per topic in "Review Notes.md" (update_review_notes); everything else on
+# the sheet comes from notes the student already has: tracker, toolkit lines, patterns, mistakes and their own solutions.
+REVIEW_HEAD = ("# Review Notes\n\n#codecoach\n\nKey ideas for each topic, written by your coach as you learn. "
+               "CodeCoach shows them in Quick review next to your drills, patterns, mistakes and solutions. Edit anything.\n")
+
+
+def md_sections(text):
+    """[(heading, body)] for the ## sections of a note (code fences respected)."""
+    out, cur, fence = [], None, False
+    for line in (text or "").split("\n"):
+        if re.match(r"^\s*(```|~~~)", line):
+            fence = not fence
+        m = None if fence else re.match(r"^##\s+(.+?)\s*#*\s*$", line)
+        if m:
+            cur = [m.group(1).strip(), []]
+            out.append(cur)
+        elif cur is not None:
+            cur[1].append(line)
+    return [(h, "\n".join(b).strip()) for h, b in out]
+
+
+def review_topics(folder):
+    files = course_files(folder)
+    rows = table_rows(read_text(os.path.join(folder, files["tracker"]))) if files.get("tracker") else []
+    out, seen = [], set()
+    for r in rows:
+        t = (r.get("topic") or "").strip()
+        if t and norm_key(t) not in seen:
+            seen.add(norm_key(t))
+            out.append({"topic": t, "level": r.get("level", ""), "mastered": "yes" in (r.get("mastered") or "").lower(),
+                        "next": r.get("next review", ""), "due": is_due(r.get("next review"))})
+    if files.get("review"):
+        for h, _ in md_sections(read_text(os.path.join(folder, files["review"]))):
+            if norm_key(h) not in seen:
+                seen.add(norm_key(h))
+                out.append({"topic": h, "level": "", "mastered": False, "next": "", "due": False})
+    return out
+
+
+def review_sheet(cfg, folder, topic):
+    files = course_files(folder)
+    key, terms = norm_key(topic), topic_terms(topic)
+    hit = lambda text: norm_key(text) == key or (bool(terms) and mentions(text, terms))
+    tracker = table_rows(read_text(os.path.join(folder, files["tracker"]))) if files.get("tracker") else []
+    row = next((r for r in tracker if norm_key(r.get("topic")) == key), None) or next((r for r in tracker if hit(r.get("topic") or "")), None)
+    ideas = []
+    if files.get("review"):
+        secs = md_sections(read_text(os.path.join(folder, files["review"])))
+        exact = [(h, b) for h, b in secs if norm_key(h) == key]
+        ideas = [{"topic": h, "markdown": b} for h, b in (exact or [x for x in secs if hit(x[0])][:3])]
+    tk_path = resolve_toolkit(folder, cfg)
+    toolkit = [r for r in (table_rows(read_text(tk_path)) if tk_path else []) if hit((r.get("task") or "") + " " + (r.get("code") or ""))][:14]
+    patterns = []
+    if files.get("patterns"):
+        for h, b in md_sections(read_text(os.path.join(folder, files["patterns"]))):
+            if hit(h) or (terms and mentions(b[:1500], terms)):
+                patterns.append({"name": h, "markdown": b[:2500]})
+    rank = lambda r: -_int(r.get("times seen"))
+    mistakes = sorted([r for r in (table_rows(read_text(os.path.join(folder, files["mistakes"]))) if files.get("mistakes") else [])
+                       if hit(" ".join(r.values()))], key=rank)[:8]
+    sols = []
+    pdir = os.path.join(folder, "practice")
+    if os.path.isdir(pdir):
+        for d in os.listdir(pdir):
+            if not os.path.isdir(os.path.join(pdir, d)) or not hit(d):
+                continue
+            for n in os.listdir(os.path.join(pdir, d)):
+                fp = os.path.join(pdir, d, n)
+                if os.path.isfile(fp) and not n.startswith("."):
+                    sols.append((os.path.getmtime(fp), fp))
+    solutions = []
+    for _, fp in sorted(sols, reverse=True)[:5]:
+        text = read_text(fp, 8000)
+        m = re.search(r"^(?:#|//) Result: (.*)$", text, re.M)
+        statement = "\n".join(re.sub(r"^(#|//) ?", "", l) for l in text[:m.start()].splitlines()) if m else ""
+        solutions.append({"name": os.path.splitext(os.path.basename(fp))[0], "result": m.group(1).strip() if m else "",
+                          "statement": statement.strip()[:600], "code": (text[m.end():] if m else text).strip(),
+                          "lang": {v["ext"]: k for k, v in LANGS.items()}.get(os.path.splitext(fp)[1].lstrip("."), "")})
+    return {"topic": (row or {}).get("topic") or topic, "tracker": row, "ideas": ideas, "toolkit": toolkit, "patterns": patterns[:3],
+            "mistakes": mistakes, "solutions": solutions}
+
+
 # ---------------------------------------------------------------- learning outcomes (per course, in "Outcomes.md")
 # Measured, not assumed: pre-checks before a topic is taught and parallel post-checks after mastery (learning gain),
 # retention probes 30/60/90 days after mastery, transfer problems in new contexts, practice and exam results.
@@ -3054,6 +3138,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not path:
                     return self.send_json({"error": "This course has no %s note." % kind})
                 return self.send_json({"note": os.path.basename(path), "text": read_text(path, 30000)})
+            if p == "/api/note/review":
+                path = os.path.join(folder, files.get("review") or "Review Notes.md")
+                if not os.path.exists(path):
+                    write_text(path, REVIEW_HEAD)
+                return self.send_json({"result": upsert_section(path, b["topic"], b["markdown"])})
+            if p == "/api/review":
+                return self.send_json(review_sheet(cfg, folder, b.get("topic") or ""))
+            if p == "/api/review/topics":
+                return self.send_json({"topics": review_topics(folder)})
             if p == "/api/outcome/log":
                 ev = b.get("event") or {}
                 if ev.get("type") not in ("problem", "exam"):

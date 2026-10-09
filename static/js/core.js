@@ -228,7 +228,7 @@
   CC.go = function (view, opts) {
     S.view = view;
     document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
-    ["today", "study", "materials", "playground", "progress", "guide", "welcome"].forEach((v) => CC.$("view-" + v).classList.toggle("hidden", v !== view));
+    ["today", "study", "materials", "playground", "progress", "guide", "welcome", "review"].forEach((v) => CC.$("view-" + v).classList.toggle("hidden", v !== view));
     const gb = CC.$("guideBtn"); if (gb) gb.classList.toggle("on", view === "guide");
     const wb = CC.$("welcomeBtn"); if (wb) wb.classList.toggle("on", view === "welcome");
     if (CC.views[view] && CC.views[view].show) CC.views[view].show(opts || {});
@@ -433,7 +433,7 @@
     else if (!S.state.has_key) setTimeout(() => CC.toast("Pick your AI to start: Settings > AI & coach (free local models work too)."), 900);
     // come back to exactly where you were: the open session if there was one, otherwise the last page
     const lastView = CC.local.get("view", "today"), openSid = CC.local.get("openSession", null);
-    const goLast = () => CC.go(["today", "study", "materials", "playground", "progress", "guide", "welcome"].includes(lastView) ? lastView : "today");
+    const goLast = () => CC.go(["today", "study", "materials", "playground", "progress", "guide", "welcome", "review"].includes(lastView) ? lastView : "today");
     if (openSid && CC.resumeSession && S.state.has_key !== undefined) {
       CC.resumeSession(openSid, { quiet: true, reload: true }).then(() => { if (!S.session) { CC.local.set("openSession", null); goLast(); } })
         .catch(() => { CC.local.set("openSession", null); goLast(); });

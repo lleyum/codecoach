@@ -185,6 +185,34 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(r["rel"].endswith("exams/" + server.today() + " Week 6- Lists.md"), r["rel"])
         self.assertEqual(self.app.api("/api/exam/save", {"folder": self.folder, "title": "Week 6: Lists?", "markdown": "# Exam"})["rel"][-6:], "(2).md")
 
+    def test_quick_review_sheet(self):
+        f = self.folder
+        self.app.api("/api/note/tracker", {"folder": f, "topic": "HashMaps", "level": "R4", "mastered": "no"})
+        self.app.api("/api/note/review", {"folder": f, "topic": "HashMaps", "markdown": "- keys are unique\n\n```python\nd[k] = d.get(k, 0) + 1\n```"})
+        self.app.api("/api/note/review", {"folder": f, "topic": "HashMaps", "markdown": "- keys are unique\n- get(k, 0) avoids KeyError"})   # replaces
+        self.app.api("/api/note/review", {"folder": f, "topic": "Recursion", "markdown": "- base case first"})
+        self.app.api("/api/note/toolkit", {"folder": f, "task": "Count with a map", "code": "`d.get(k, 0) + 1`", "status": "shaky"})
+        self.app.api("/api/note/mistake", {"folder": f, "mistake": "Forgot the map default", "example": "d[k] += 1 on a new key", "fix": "use d.get(k, 0)"})
+        self.app.api("/api/note/save_practice", {"folder": f, "topic": "HashMaps", "name": "wordCount", "language": "python",
+                                                 "statement": "Count each word.", "code": "def word_count(ws):\n    return {}", "result": "solved in 3m, 1 runs, 0 hints"})
+        d = self.app.api("/api/review", {"folder": f, "topic": "HashMaps"})
+        self.assertEqual(d["tracker"]["level"], "R4")
+        self.assertEqual(len(d["ideas"]), 1)
+        self.assertIn("avoids KeyError", d["ideas"][0]["markdown"])
+        self.assertNotIn("d[k] = d.get", d["ideas"][0]["markdown"])
+        self.assertEqual([r["task"] for r in d["toolkit"]], ["Count with a map"])
+        self.assertEqual(len(d["mistakes"]), 1)
+        sol = d["solutions"][0]
+        self.assertEqual((sol["name"], sol["lang"], sol["statement"]), ("wordCount", "python", "Count each word."))
+        self.assertTrue(sol["code"].startswith("def word_count"))
+        self.assertIn("solved in 3m", sol["result"])
+        topics = [t["topic"] for t in self.app.api("/api/review/topics", {"folder": f})["topics"]]
+        self.assertIn("HashMaps", topics)
+        self.assertIn("Recursion", topics)                     # in Review Notes, not yet in the tracker
+        self.assertIn("review", self.app.api("/api/course?folder=" + urllib_quote(f))["files"])
+        empty = self.app.api("/api/review", {"folder": f, "topic": "Graphs"})
+        self.assertEqual((empty["tracker"], empty["ideas"], empty["solutions"]), (None, [], []))
+
     def sess(self, sid, **kw):
         return dict({"id": sid, "title": "S " + sid, "mode": "learn", "course": {"name": "Python track", "folder": self.folder},
                      "messages": [], "display": [], "problems": [], "usage": {"cost": 0, "tokens": 0}}, **kw)

@@ -102,6 +102,7 @@
         btn("Syntax drills", "bolt", () => CC.go("study", { fresh: true, mode: "drill" }), "sm"),
         btn("Quiz simulation", "timer", () => CC.go("study", { fresh: true, mode: "quizsim" }), "sm"),
         btn("Practice exam", "list", () => CC.go("study", { fresh: true, mode: "exam" }), "sm"),
+        btn("Quick review", "book", () => CC.go("review"), "sm"),
         btn("Playground", "code", () => CC.go("playground"), "sm"),
         btn("Materials", "folder", () => CC.go("materials"), "sm"),
         btn("Notes", "book", () => CC.go("progress"), "sm")),
@@ -708,7 +709,7 @@
   };
 
   // ================================================================== PROGRESS
-  const TABS = [["overview", "Overview"], ["roadmap", "Roadmap"], ["tracker", "Mastery"], ["toolkit", "Toolkit"], ["mistakes", "Mistakes"], ["patterns", "Patterns"], ["blueprint", "Blueprint"], ["profile", "Course profile"], ["learner", "Learner profile"]];
+  const TABS = [["overview", "Overview"], ["roadmap", "Roadmap"], ["tracker", "Mastery"], ["toolkit", "Toolkit"], ["mistakes", "Mistakes"], ["patterns", "Patterns"], ["blueprint", "Blueprint"], ["review", "Review notes"], ["profile", "Course profile"], ["learner", "Learner profile"]];
   const PR = { tab: CC.local.get("pr_tab", "overview"), data: null, editing: false };
   CC.views.progress = {
     async show() {

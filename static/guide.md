@@ -151,6 +151,17 @@ Pick **Exam**, set the minutes and how many multiple-choice and coding questions
 
 No AI runs during the exam: building it costs about as much as a few coach messages, and taking it costs nothing.
 
+### Quick review
+
+A read-only study sheet to look over before a quiz, an exam or a session. Open it from **Today → Quick review**, the **Quick review** card on the Study page, or the book icon next to any past session.
+
+- **By topic:** the key ideas your coach wrote for it, the syntax lines you drilled (with how solid each is), the patterns that use it, your mistakes to watch out for, and your own solutions. Topics due for review are marked ●. **Practice this** starts a session on it.
+- **By session:** what you practiced, in order: drills with the standard answer, quiz questions with the right answer and explanation, Parsons problems in the right order, and every coding problem with your code. Exams include the model solutions.
+- **During a session:** press **Review** in the session bar. The sheet opens beside the chat and updates as you go.
+- **Copy as Markdown** puts the sheet on your clipboard for Notes, Obsidian or a doc.
+
+The key ideas live in `Review Notes.md` in your course folder (Progress → Review notes). Your coach keeps them current as it teaches; you can edit them too.
+
 ### Timers and pausing
 
 - **Problem clock** (top right of the workspace): how long you've spent on this problem. Sent to your coach when you submit, get stuck or give up, saved with your solution, and used to judge timed mastery. If a time limit is set it shows "4m 12s / 10m" and turns amber when you go over.

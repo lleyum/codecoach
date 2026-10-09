@@ -6,6 +6,7 @@ A free study app for learning to code. An AI coach teaches you, quizzes you, dri
 - **A mastery ladder:** R0 syntax drills → R1 tracing → R2 Parsons problems → R3 fill-in → R4 debug → R5 from scratch → R6 timed. Mastered = three new problems solved without hints.
 - **Spaced, interleaved review:** 2 → 5 → 12 → 30 → 75 days, adjusted by how each review went.
 - **Practice exams:** the coach builds a whole exam up front and checks every coding problem; you take it timed and locked down with no AI, it's graded on your computer, then the coach debriefs.
+- **Quick review:** a read-only study sheet for any topic or past session (the coach's key ideas, syntax you drilled, patterns, mistakes, your own code), also live beside the chat during a session.
 - **Outcomes you can see:** learning gain from pre-check to post-check, retention 30/60/90 days after mastery, transfer to new problems, and speed and hint trends (`Outcomes.md`, CSV export).
 - **Playground** for seven languages, an in-app guide, 47 themes, optional typing and effect sounds.
 
