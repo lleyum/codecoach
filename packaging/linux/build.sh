@@ -12,4 +12,5 @@ cp "$ROOT/static/icon.png" "$PKG/codecoach.png"
 chmod +x "$PKG/codecoach" "$PKG/install.sh"
 printf 'CodeCoach %s for Linux\n\n  ./install.sh   adds CodeCoach to your app menu (no root needed)\n  ./codecoach    or just run it from here\n\nNeeds python3. Your notes live in the Library folder you choose; settings and API keys in ~/.codecoach\n' "$VERSION" > "$PKG/README.txt"
 tar -czf "$OUT/CodeCoach-Linux.tar.gz" -C "$OUT/work-linux" CodeCoach
+python3 "$ROOT/packaging/make_update.py" "$PKG/app" "$OUT"        # one-click update files (same code for every platform)
 echo "== done: $OUT/CodeCoach-Linux.tar.gz ($(du -h "$OUT/CodeCoach-Linux.tar.gz" | cut -f1))"

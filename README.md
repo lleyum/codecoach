@@ -47,7 +47,7 @@ Keys go in Settings (`"keys": {"openrouter": "..."}`) or the usual environment v
 
 ## Download
 
-Get the latest build from the **Releases** page:
+Get the latest build from the **Releases** page. After that, updates are one click inside the app (**Update available → Update now**); a full download is only needed when an update changes the app's outer layer.
 
 | | |
 | --- | --- |
@@ -78,6 +78,8 @@ git push origin v3.0.0
 ```
 
 Every build is smoke-tested on GitHub's machines (`packaging/smoke_test.py`: the packaged server starts with its bundled Python, serves the page and offline files, and runs a Python problem's tests). Use **Actions → Build apps → Run workflow** to build without publishing; the files appear under the run's artifacts.
+
+Each release also gets `CodeCoach-update.zip` and `CodeCoach-update.json` (built by `packaging/make_update.py`): the in-app one-click update. Raise `SHELL_VERSION` in `server.py` only when a change needs a new bundled Python, Mac window or Windows launcher; older apps are then told to do a full download.
 
 Or build locally: `packaging/macos/build.sh` (on a Mac), `packaging/windows/build.ps1` (on Windows), `packaging/linux/build.sh`. Each first runs `packaging/fetch_vendor.py` so the app works offline.
 

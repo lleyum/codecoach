@@ -1240,7 +1240,15 @@
         h("div", { class: "field" }, h("label", { text: "Updates" }),
           h("div", { class: "row wrap" }, h("label", { class: "row small", style: { gap: "6px" } }, updChk, "Check for new versions once a day"),
             h("button", { class: "btn sm", html: CC.icon("refresh") + "<span>Check now</span>", onclick: () => CC.checkUpdate(true) })),
-          h("div", { class: "hint", text: "Asks GitHub for the latest release. Nothing about you or your study data is sent, and nothing downloads by itself." })),
+          h("div", { class: "hint", text: "Asks GitHub for the latest release. Nothing about you or your study data is sent, and nothing downloads by itself." }),
+          st.in_place_update ? h("div", { class: "row wrap" }, h("span", { class: "small muted", text: "Running " + st.version + ", installed with Update now." }),
+            h("button", { class: "btn sm ghost", text: "Undo this update", onclick: async () => {
+              if (!(await CC.confirm("Undo the update?", "CodeCoach restarts on the version it had before. You can update again later.", "Undo update"))) return;
+              const r = await CC.api("/api/update/undo", {});
+              if (r.error) return CC.toast(r.error, true);
+              CC.toast("Restarting...");
+              CC.restartApp(null);
+            } })) : null),
         h("div", { class: "section-title", text: "Keyboard shortcuts" }),
         h("div", { class: "shortcuts", html: [
           ["⌘ 1-5", "Today · Study · Materials · Playground · Progress"], ["⌘ ↵", "Run code"], ["⇧ ⌘ ↵", "Submit solution (Study)"], ["⌘ S", "Save snippet / note"],

@@ -29,6 +29,8 @@ jobs:
       - run: pip install playwright && python -m playwright install --with-deps chromium
       - run: python packaging/fetch_vendor.py
       - run: E2E_SHOTS=$PWD python -m unittest discover -s tests/e2e -v
+      - name: One-click update in the page
+        run: python -m unittest tests.test_update -v
       - if: failure()
         uses: actions/upload-artifact@v7
         with:

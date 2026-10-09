@@ -310,7 +310,10 @@ Optional sounds, all generated inside the app (no audio files), tuned to stay su
   - **Conflict copies:** when a sync service can't merge two edits it keeps both files ("conflicted copy", "name 2", "-LAPTOP", "sync-conflict"). CodeCoach shows these as one session with "2 versions" and asks once you open it: **Compare**, **Use newest**, or **Keep both**. Replaced versions go to `CodeCoach/trash`, never deleted.
 - **Per computer only:** API keys, which AI, Library location, theme and look, Playground drafts. Keys are never stored in the Library or in exports.
 - **Export everything:** Welcome (or Settings → Library & sync) → **Export everything** makes one zip of every course, solution, session and setting (minus keys), with a note on how to restore it.
-- **Updates:** once a day CodeCoach asks GitHub whether a newer version exists (nothing about you is sent). If there is one, an **Update available** button appears at the bottom of the sidebar with what's new and a Download link; installing it never touches your Library. **Skip this version**, **Later**, or turn checking off in Settings → App.
+- **Updates:** once a day CodeCoach asks GitHub whether a newer version exists (nothing about you is sent). If there is one, an **Update available** button appears at the bottom of the sidebar with what's new. Press **Update now**: CodeCoach downloads the new version (a few MB), checks it isn't damaged, and restarts on it, usually in under ten seconds, right back where you were. Your Library and settings are never touched.
+  - Once in a while an update changes the app itself; then it says so and offers a **Full download** (replace the app in Applications or run the installer).
+  - If an update ever fails to start, CodeCoach goes back to the version it had automatically. **Settings → App → Undo this update** does the same by hand.
+  - **Skip this version**, **Later**, or turn checking off in Settings → App.
 - **Moving to a new computer:** sync or copy the Library (or unzip an export), install CodeCoach, choose that folder, add your AI key.
 
 ## Routines that work

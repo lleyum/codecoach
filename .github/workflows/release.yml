@@ -80,11 +80,18 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: linux
-          path: dist/CodeCoach-Linux.tar.gz
+          path: |
+            dist/CodeCoach-Linux.tar.gz
+            dist/CodeCoach-update.zip
+            dist/CodeCoach-update.json
       - name: Smoke test
         run: |
           mkdir -p "$RUNNER_TEMP/lx" && tar -xzf dist/CodeCoach-Linux.tar.gz -C "$RUNNER_TEMP/lx"
           python3 packaging/smoke_test.py -- python3 -B "$RUNNER_TEMP/lx/CodeCoach/app/server.py"
+      - name: Check the one-click update files
+        run: |
+          python3 -c "import json,hashlib; m=json.load(open('dist/CodeCoach-update.json')); assert hashlib.sha256(open('dist/CodeCoach-update.zip','rb').read()).hexdigest()==m['sha256']; print(m)"
+          python3 -m zipfile -l dist/CodeCoach-update.zip | grep -q "static/vendor/codemirror.min.js"
 
   release:
     name: Publish release
@@ -109,3 +116,4 @@ jobs:
 
             First launch on a Mac: if macOS says CodeCoach can't be opened, go to System Settings > Privacy & Security > Open Anyway (the app isn't notarized by Apple yet).
             Your data stays in your own Library folder - updating never touches it.
+            Already have CodeCoach 3.4 or newer? Use **Update available > Update now** in the app instead (CodeCoach-update.zip is that update).

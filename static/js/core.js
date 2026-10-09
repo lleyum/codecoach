@@ -365,14 +365,39 @@
   };
   function showUpdate(u) {
     const notes = MD.into(h("div", { class: "md update-notes" }), u.notes || "See the release page for what's new.");
-    CC.modal("CodeCoach " + u.latest, h("div", { class: "stack" },
-      h("p", { style: { margin: 0 }, text: "You have " + u.current + ". Download the new version, then replace CodeCoach in your Applications folder (or run the new installer). Your Library and settings stay as they are." }),
-      notes),
+    const msg = h("p", { style: { margin: 0 }, text: u.installable ? "You have " + u.current + ". Update now: CodeCoach downloads the new version (a few MB), checks it and restarts. Your sessions, notes and settings stay as they are."
+      : "You have " + u.current + ". Download the new version, then replace CodeCoach in your Applications folder (or run the new installer). Your Library and settings stay as they are." });
+    const download = h("a", { class: "btn " + (u.installable ? "ghost" : "primary"), href: u.url, target: "_blank", rel: "noopener", html: CC.icon("download") + "<span>" + (u.installable ? "Full download" : "Download") + "</span>" });
+    const now = u.installable ? h("button", { class: "btn primary", html: CC.icon("download") + "<span>Update now</span>", onclick: () => CC.installUpdate(u, msg, now, download) }) : null;
+    CC.modal("CodeCoach " + u.latest, h("div", { class: "stack" }, msg, notes),
       [h("button", { class: "btn ghost", text: "Skip this version", onclick: async () => { await CC.api("/api/update/skip", { version: u.latest }); CC.$("updateChip").classList.add("hidden"); CC.closeModal(); CC.toast("You won't be reminded about " + u.latest + "."); } }),
        h("button", { class: "btn ghost", text: "Later", onclick: () => { laterThisLaunch = true; CC.$("updateChip").classList.add("hidden"); CC.closeModal(); } }),
-       h("span", { class: "spacer" }),
-       h("a", { class: "btn primary", href: u.url, target: "_blank", rel: "noopener", html: CC.icon("download") + "<span>Download</span>" })]);
+       h("span", { class: "spacer" }), download, now], { sticky: true });
   }
+  // restart into the new version: save everything, ask the server to restart, wait for it, reload the page
+  CC.restartApp = async function (expect, status) {
+    if (CC.flushSave) CC.flushSave();
+    const say = (t) => { if (status) status.textContent = t; };
+    say("Restarting CodeCoach...");
+    await CC.api("/api/restart", {});
+    for (let i = 0; i < 80; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const p = await (await fetch("/api/ping", { cache: "no-store" })).json();
+        if (p.ok && (!expect || p.version === expect || i > 30)) { CC.local.set("justUpdated", p.version); location.reload(); return; }
+      } catch (e) { /* still restarting */ }
+    }
+    say("CodeCoach didn't come back on its own. Quit it and open it again - the update is installed.");
+  };
+  CC.installUpdate = async function (u, msg, btn, download) {
+    btn.disabled = true;
+    msg.textContent = "Downloading and checking CodeCoach " + u.latest + "...";
+    const r = await CC.api("/api/update/install", {});
+    if (r.error) { btn.disabled = false; msg.textContent = "The update didn't install: " + r.error + " You can try again, or use Full download."; return; }
+    if (r.full) { btn.remove(); download.className = "btn primary"; msg.textContent = r.reason + " Download it, then replace CodeCoach in Applications (or run the installer)."; return; }
+    if (S.session && S.busy && S.abort) { S.stopReq = true; try { S.abort.abort(); } catch (e) { /* ignore */ } }
+    await CC.restartApp(r.version, msg);
+  };
 
   CC.init = async function () {
     localizeKeys();
@@ -447,6 +472,8 @@
       try { history.replaceState(null, "", "/"); } catch (e) { /* ignore */ }
       setTimeout(() => CC.toast("macOS restarted CodeCoach's page (usually to free memory). Your session, code and draft are back where you left them."), 900);
     }
+    const upd = CC.local.get("justUpdated", null);
+    if (upd) { CC.local.set("justUpdated", null); setTimeout(() => CC.toast(upd === S.state.version ? "Updated to CodeCoach " + upd + "." : "Restarted - running CodeCoach " + S.state.version + "."), 800); }
     if (!CC.local.get("guide_seen", false)) { CC.local.set("guide_seen", true); setTimeout(() => CC.toast("New: \"How to use\" in the sidebar explains everything CodeCoach does."), 1200); }
     CC.usageLine();
   };

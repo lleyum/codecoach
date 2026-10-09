@@ -17,11 +17,13 @@ import base64
 import csv
 import datetime as dt
 import difflib
+import hashlib
 import html
 import io
 import json
 import os
 import re
+import runpy
 import secrets
 import shutil
 import ssl
@@ -37,7 +39,10 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "3.3.0"
+VERSION = "3.4.0"
+# The app's outer layer: bundled Python, Mac window, Windows launcher. Raise this only when CodeCoach's code needs a change
+# there; in-place updates that need a newer outer layer ask for a full download instead.
+SHELL_VERSION = 1
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 VENDOR_DIR = os.path.join(STATIC_DIR, "vendor")
@@ -629,14 +634,18 @@ def update_status(cfg, force=False):
             with urlopen(req, 6) as r:
                 rel = json.loads(r.read().decode("utf-8"))
             if not rel.get("draft") and not rel.get("prerelease"):
-                st.update({"latest": rel.get("tag_name", ""), "url": rel.get("html_url", ""), "notes": (rel.get("body") or "")[:4000]})
+                assets = {a.get("name"): a.get("browser_download_url") for a in rel.get("assets") or []}
+                st.update({"latest": rel.get("tag_name", ""), "url": rel.get("html_url", ""), "notes": (rel.get("body") or "")[:4000],
+                           "zip_url": assets.get(UPDATE_ZIP, ""), "manifest_url": assets.get(UPDATE_MANIFEST, "")})
             st["checked_at"] = time.time()
             write_text(update_file(), json.dumps(st))
         except Exception:
             pass                                  # offline or rate-limited: try again next launch
     latest = st.get("latest") or ""
     out.update({"latest": latest, "url": st.get("url", ""), "notes": st.get("notes", ""), "skipped": st.get("skipped", ""),
-                "available": bool(latest) and version_tuple(latest) > version_tuple(VERSION) and latest != st.get("skipped")})
+                "available": bool(latest) and version_tuple(latest) > version_tuple(VERSION) and latest != st.get("skipped"),
+                "installable": PACKAGED and bool(st.get("zip_url") and st.get("manifest_url")),
+                "in_place": running_update(), "can_undo": running_update()})
     return out
 
 
@@ -648,6 +657,165 @@ def skip_update(version):
         st = {}
     st["skipped"] = version
     write_text(update_file(), json.dumps(st))
+
+
+# ---------------------------------------------------------------- in-place updates (one click, no reinstall)
+# A release also publishes CodeCoach-update.zip: just CodeCoach's own code (server, pages, prompts, templates), about
+# 2-5 MB. "Update now" checks its SHA-256, unpacks it into ~/.codecoach/app/<version> and restarts. At launch the
+# downloaded app runs the newest healthy version found there (in this same process, so no launcher changes). The app
+# bundle itself is never modified, so macOS code signing stays intact. A version that fails to start twice is skipped
+# automatically; Settings > App > Undo update goes back by hand.
+UPDATE_ZIP, UPDATE_MANIFEST = "CodeCoach-update.zip", "CodeCoach-update.json"
+
+
+def updates_root():
+    return os.path.join(LOCAL_DIR, "app")
+
+
+def base_dir():
+    """The installed app's own folder (not an in-place update)."""
+    return os.environ.get("CC_BASE_APP") or APP_DIR
+
+
+def running_update():
+    return os.path.realpath(APP_DIR).startswith(os.path.realpath(updates_root()) + os.sep)
+
+
+def shell_version():
+    try:
+        with open(os.path.join(base_dir(), "static", "build.json"), encoding="utf-8") as f:
+            return int(json.load(f).get("shell") or 0)          # builds before in-place updates existed: 0
+    except Exception:
+        return SHELL_VERSION                                   # running from source: the outer layer is this code
+
+
+def _flag(d, name, value=None):
+    path = os.path.join(d, "." + name)
+    if value is None:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            return None
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(value))
+    except OSError:
+        pass
+
+
+def update_candidates():
+    """[(version tuple, folder)] of installed updates newer than this code that this app can run, newest first."""
+    root, out = updates_root(), []
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return out
+    for n in names:
+        d = os.path.join(root, n)
+        try:
+            with open(os.path.join(d, "manifest.json"), encoding="utf-8") as f:
+                m = json.load(f)
+        except Exception:
+            continue
+        if not os.path.isfile(os.path.join(d, "server.py")) or _flag(d, "bad") is not None:
+            continue
+        if version_tuple(m.get("version")) <= version_tuple(VERSION) or int(m.get("min_shell") or 1) > shell_version():
+            continue
+        out.append((version_tuple(m.get("version")), d))
+    return sorted(out, reverse=True)
+
+
+def boot_update():
+    """Downloaded apps: hand over to the newest installed update. Returns only if there is none (or none works)."""
+    if not PACKAGED or os.environ.get("CC_BASE_APP") or os.environ.get("CC_NO_UPDATE"):
+        return
+    for _, d in update_candidates():
+        good = _flag(d, "good") is not None
+        tries = _int(_flag(d, "tries"))
+        if not good and tries >= 2:
+            _flag(d, "bad", "failed to start twice")
+            continue
+        if not good:
+            _flag(d, "tries", tries + 1)
+        os.environ["CC_BASE_APP"] = APP_DIR
+        os.environ.setdefault("CC_BOOT_SCRIPT", os.path.abspath(sys.argv[0]))
+        argv = list(sys.argv)
+        try:
+            runpy.run_path(os.path.join(d, "server.py"), run_name="__main__")
+            sys.exit(0)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print("update in %s didn't start (%s) - using the installed version" % (d, e))
+            if _flag(d, "good") is None:
+                _flag(d, "bad", str(e)[:300])
+            sys.argv = argv
+            os.environ.pop("CC_BASE_APP", None)
+            continue
+
+
+def install_update():
+    if not PACKAGED:
+        raise ValueError("Updating in place works in the downloaded app. Running from source? Use git pull.")
+    with open(update_file(), encoding="utf-8") as f:
+        st = json.load(f)
+    if not st.get("zip_url") or not st.get("manifest_url"):
+        return {"full": True, "reason": "This release can only be installed with a full download."}
+    ua = {"User-Agent": "CodeCoach"}
+    with urlopen(urllib.request.Request(st["manifest_url"], headers=ua), 20) as r:
+        m = json.loads(r.read().decode("utf-8"))
+    if int(m.get("min_shell") or 1) > shell_version():
+        return {"full": True, "reason": "This version changes the app itself, so it needs one full download."}
+    if version_tuple(m.get("version")) <= version_tuple(VERSION):
+        return {"ok": True, "version": VERSION, "already": True}
+    with urlopen(urllib.request.Request(st["zip_url"], headers=ua), 120) as r:
+        data = r.read(80 * 1024 * 1024 + 1)
+    if len(data) > 80 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != (m.get("sha256") or "").lower():
+        raise ValueError("The download was damaged (checksum mismatch). Try again.")
+    root = updates_root()
+    os.makedirs(root, exist_ok=True)
+    tmp = os.path.join(root, ".tmp-" + secrets.token_hex(4))
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for info in z.infolist():
+            parts = info.filename.replace("\\", "/").split("/")
+            if info.filename.startswith(("/", "\\")) or ".." in parts or ":" in info.filename:
+                raise ValueError("unexpected file in the update: " + info.filename)
+        z.extractall(tmp)
+    try:
+        with open(os.path.join(tmp, "manifest.json"), encoding="utf-8") as f:
+            inner = json.load(f)
+        if inner.get("version") != m.get("version") or not os.path.isfile(os.path.join(tmp, "server.py")):
+            raise ValueError("the update's contents don't match its description")
+        dest = os.path.join(root, re.sub(r"[^\w.\-]", "", m["version"]))
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        os.replace(tmp, dest)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    # keep the two newest plus the one running now
+    keep = {d for _, d in update_candidates()[:2]} | {os.path.realpath(APP_DIR)}
+    for n in os.listdir(root):
+        d = os.path.join(root, n)
+        if os.path.isdir(d) and d not in keep and os.path.realpath(d) not in keep and not n.startswith(".tmp-"):
+            shutil.rmtree(d, ignore_errors=True)
+    return {"ok": True, "version": m["version"]}
+
+
+def restart_server():
+    """Start this app again from its installed copy, which picks the newest update. Same process on Mac/Linux."""
+    script = os.environ.get("CC_BOOT_SCRIPT") or os.path.join(base_dir(), "server.py")
+    args = [sys.executable, "-B", script] + sys.argv[1:]
+    env = {k: v for k, v in os.environ.items() if k not in ("CC_BASE_APP", "CC_BOOT_SCRIPT")}
+    env["CC_RESTART"] = "1"
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    if IS_WIN:
+        subprocess.Popen(args, env=env, close_fds=True, creationflags=0x00000008 | 0x00000200)   # detached, own group
+        os._exit(0)
+    os.execve(sys.executable, args, env)
 
 
 # ---------------------------------------------------------------- the Library folder
@@ -2770,6 +2938,7 @@ class Handler(BaseHTTPRequestHandler):
                     "platform": sys.platform,
                     "suggested_models": suggested_models(),
                     "device": dict(zip(("id", "name"), device(cfg))),
+                    "in_place_update": running_update(),
                 })
             if p == "/api/course":
                 folder = self.check_course(q["folder"], cfg)
@@ -3040,6 +3209,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True, "library": path, "courses": len(find_courses(path))})
             if p == "/api/pick_folder":
                 return self.send_json({"path": pick_folder(b.get("prompt") or "Choose your CodeCoach Library folder", b.get("start") or cfg["vault"])})
+            if p == "/api/update/install":
+                return self.send_json(install_update())
+            if p == "/api/restart":
+                self.send_json({"ok": True})
+                threading.Timer(0.4, restart_server).start()
+                return
+            if p == "/api/update/undo":
+                if not running_update():
+                    raise ValueError("This is the version that came with the app; there's no update to undo.")
+                _flag(APP_DIR, "bad", "undone by the user")
+                return self.send_json({"ok": True})          # the page then asks for /api/restart
             if p == "/api/update/skip":
                 skip_update(str(b.get("version") or ""))
                 return self.send_json({"ok": True})
@@ -3347,6 +3527,7 @@ def take_over_port(port, force=False):
 
 
 def main():
+    boot_update()
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
@@ -3366,9 +3547,14 @@ def main():
             migrate_v1_sessions(cfg)
         except Exception:
             pass
-    try:
-        srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    except OSError:
+    srv = None
+    for _ in range(40 if os.environ.pop("CC_RESTART", None) else 1):     # after a restart the old copy may still be letting go of the port
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
+            break
+        except OSError:
+            time.sleep(0.25)
+    if srv is None:
         if take_over_port(a.port, force=bool(a.parent_pid)) == "same":
             print("CodeCoach %s is already running at http://127.0.0.1:%d/" % (VERSION, a.port))
             if not a.no_browser:
@@ -3376,6 +3562,8 @@ def main():
             return
         srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     srv.daemon_threads = True
+    if running_update():
+        _flag(APP_DIR, "good", VERSION)                    # started fine: never skip this version automatically
     url = "http://127.0.0.1:%d/" % a.port
     print("CodeCoach %s is running at %s" % (VERSION, url))
     # with an app window as parent, the server lives exactly as long as the window; otherwise it auto-quits when idle

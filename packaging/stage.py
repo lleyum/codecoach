@@ -38,5 +38,5 @@ for name in server.VENDOR_SOURCES:
 if missing:
     sys.exit("static/vendor is incomplete - run packaging/fetch_vendor.py first. Missing: " + ", ".join(missing))
 with open(os.path.join(a.dest, "static", "build.json"), "w") as f:
-    json.dump({"repo": a.repo, "version": a.version or server.VERSION}, f)
+    json.dump({"repo": a.repo, "version": a.version or server.VERSION, "shell": server.SHELL_VERSION}, f)
 print("staged CodeCoach %s into %s" % (a.version or server.VERSION, a.dest))
