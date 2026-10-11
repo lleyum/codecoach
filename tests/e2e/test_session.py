@@ -70,6 +70,53 @@ class SessionTest(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_one_clock_pauses_when_away(self):
+        with App() as app, sync_playwright() as p:
+            app.make_course("python", "Python track")
+            app.llm.reply("Timed one.", tools=[("give_problem", PROBLEM), ("start_timer", {"minutes": 10, "label": "countPositive"})])
+            app.llm.reply("Done.", when="[PROBLEM RESULT]")
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            try:
+                page.goto(app.base + "/")
+                page.wait_for_selector("#view-today .stats", timeout=15000)
+                page.click("#nav button[data-view=study]")
+                page.click("#view-study >> text=Start session")
+                page.wait_for_selector("#pStatement >> text=greater than 0", timeout=15000)
+                page.wait_for_selector("#chat >> text=Time limit for countPositive")
+                self.assertEqual(page.locator("#pClock").count(), 0)                       # no second clock
+                page.wait_for_function("/left$/.test(document.querySelector('#timerBadge').textContent)", timeout=5000)
+                self.assertIsNone(page.evaluate("CC.S.session.timer || null"))           # the start_timer became the problem's limit
+                # switching away pauses, coming back resumes
+                page.evaluate("window.dispatchEvent(new Event('blur'))")
+                self.assertTrue(page.evaluate("CC.S.session.paused"))
+                self.assertIn("isn't the window in front", page.inner_text("#pauseBanner"))
+                frozen = page.evaluate("CC.S.session.problems[0].activeMs")
+                page.wait_for_timeout(1500)
+                self.assertEqual(page.evaluate("CC.S.session.problems[0].activeMs"), frozen)
+                page.evaluate("window.dispatchEvent(new Event('focus'))")
+                self.assertFalse(page.evaluate("CC.S.session.paused"))
+                # a manual pause stays paused when the window comes back
+                page.click("#pauseBtn")
+                page.evaluate("window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus'))")
+                self.assertTrue(page.evaluate("CC.S.session.paused"))
+                page.click("#pauseBanner >> text=Resume")
+                page.evaluate("(c) => document.querySelector('#pEditor .CodeMirror').CodeMirror.setValue(c)", SOLUTION)
+                page.click("#submitBtn")
+                page.wait_for_selector("#chat >> text=Done.", timeout=20000)
+                result = [m for r in app.llm.requests for m in r["messages"] if "[PROBLEM RESULT]" in json.dumps(m)][-1]
+                self.assertIn("limit 10", json.dumps(result))
+                self.assertIn("within the limit", json.dumps(result))
+                self.assertTrue(page.inner_text("#timerBadge").startswith("✓"))
+                self.assertEqual(errors, [])
+            except Exception:
+                page.screenshot(path=os.path.join(os.environ.get("E2E_SHOTS", app.home), "e2e-failure.png"))
+                raise
+            finally:
+                browser.close()
+
     def test_quick_review(self):
         with App() as app, sync_playwright() as p:
             app.make_course("python", "Python track")

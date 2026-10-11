@@ -217,7 +217,7 @@
       const t = await CC.prompt("Rename session", "Title", s.title);
       if (t) { s.title = t; title.textContent = t; scheduleSave(0); }
     };
-    const timer = h("div", { class: "timer hidden", id: "timerBadge", title: "Countdown set by your coach (quiz sims / timed problems)" });
+    const timer = h("div", { class: "timer hidden", id: "timerBadge" });
     const pauseBtn = h("button", { class: "btn sm ghost", id: "pauseBtn", title: "Pause the timers while you step away" });
     const cost = h("span", { class: "chip", id: "costChip" });
     const wsToggle = h("button", { class: "btn icon ghost", title: "Show/hide workspace", html: CC.icon("panel") });
@@ -256,7 +256,7 @@
     const wsMain = h("div", { class: "ws-body hidden", id: "wsMain" },
       statement, h("div", { class: "editor-wrap" }, edHost), out);
     const workcol = h("div", { class: "workcol" },
-      h("div", { class: "ws-head" }, tabs, h("span", { class: "chip", id: "pClock" })),
+      h("div", { class: "ws-head" }, tabs),
       wsEmpty, wsMain,
       h("div", { class: "ws-actions hidden", id: "wsActions" }, runBtn, submitBtn, stuckBtn, giveBtn, h("span", { class: "spacer" }), resetBtn));
     const splitter = h("div", { class: "splitter" });
@@ -643,7 +643,7 @@
         purpose: { type: "string", enum: ["practice", "pre", "post", "retention", "transfer"], description: "Outcome tracking: pre = check before teaching a new topic, post = parallel check after mastery, retention = 30/60/90-day check, transfer = new context. Default practice." },
         window: { type: "integer", description: "retention only: 30, 60 or 90" } },
         required: ["name", "topic", "rung", "statement", "starter_code", "reference_solution", "test_code"] } } },
-    { type: "function", function: { name: "start_timer", description: "Visible countdown (quiz sims, timed problems).",
+    { type: "function", function: { name: "start_timer", description: "Countdown for a whole quiz sim or set of tasks. For ONE timed problem use give_problem's time_limit_min instead (if a problem is open outside a quiz sim, this sets that problem's limit). The student sees one clock.",
       parameters: { type: "object", properties: { minutes: { type: "number" }, label: { type: "string" } }, required: ["minutes"] } } },
     { type: "function", function: { name: "list_materials", description: "List the student's course materials (units, titles, types, paths).", parameters: { type: "object", properties: {} } } },
     { type: "function", function: { name: "read_material", description: "Read one course material by path.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
@@ -759,6 +759,16 @@
     },
     async start_timer(a) {
       const mins = Math.max(0.5, Number(a.minutes) || 50);
+      const cp = curProblem();
+      if (cp && cp.status === "open" && S.session.mode !== "quizsim") {      // one problem: one clock, the problem's own
+        cp.timeLimit = Math.round((elapsedMs(cp) / 60000 + mins) * 10) / 10;
+        cp.limitWarned = false;
+        if (S.session.paused) resumeClocks();
+        tickClock();
+        addItem({ kind: "sys", icon: "timer", text: "Time limit for " + cp.name + ": " + mins + " min from now" });
+        scheduleSave();
+        return { started: true, minutes: mins, note: "Set as the time limit of the open problem " + cp.name + "; its result will report the time against this limit." };
+      }
       S.session.timer = { end: Date.now() + mins * 60000, remaining: null, label: a.label || "Timer", fired: false };
       if (S.session.paused) resumeClocks();
       startTimerLoop();
@@ -1217,7 +1227,6 @@
       showSyncBanner();
     }
   }
-  window.addEventListener("focus", () => { checkRemoteChange(); });
 
   // ================================================================== workspace / problems
   function showWorkspace() {
@@ -1260,22 +1269,51 @@
     tickClock();
   }
 
-  // The problem clock repaints once a second only while it is actually running and visible - no idle wake-ups.
+  // ONE clock, in the session bar. A quiz-sim countdown (start_timer) owns it while it runs; otherwise it shows the open
+  // problem's time - counting down when the problem has a limit. It's the same number the coach gets in the result, and
+  // it stops whenever the session is paused or CodeCoach isn't the window in front. Repaints only while running.
   let clockTimer = null;
+  const fmt = (ms) => { const t = Math.max(0, Math.round(ms / 1000)); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
+  const sessionCountdown = () => { const t = S.session && S.session.timer; return t && !t.fired ? t : null; };
   function tickClock() {
     clearTimeout(clockTimer); clockTimer = null;
     paintClock();
     const p = curProblem();
-    if (!document.hidden && $("pClock") && S.session && !S.session.paused && p && p.status === "open")
+    if (!document.hidden && $("timerBadge") && S.session && !S.session.paused && !sessionCountdown() && p && p.status === "open")
       clockTimer = setTimeout(tickClock, 1000 - (elapsedMs(p) % 1000) + 15);
   }
   function paintClock() {
-    const p = curProblem(), c = $("pClock");
-    if (!c) return;
-    if (!p) { c.textContent = ""; return; }
-    c.textContent = p.status === "open" ? (S.session.paused ? "⏸ " : "") + elapsed(p) + (p.timeLimit ? " / " + p.timeLimit + "m" : "") : (p.solvedIn ? "solved in " + p.solvedIn : p.status);
-    c.classList.toggle("warn", p.status === "open" && !!p.timeLimit && elapsedMs(p) > p.timeLimit * 60000);
-    c.title = "Time on this problem (pauses when you pause, close the session or the app)";
+    const c = $("timerBadge");
+    if (!c || !S.session || sessionCountdown()) return;          // the quiz-sim countdown paints itself (startTimerLoop)
+    const p = curProblem();
+    if (!p) { c.classList.add("hidden"); return; }
+    c.classList.remove("hidden", "low", "over");
+    const paused = S.session.paused ? "⏸ " : "";
+    if (p.status !== "open") {
+      c.textContent = p.solvedIn ? "✓ " + p.solvedIn : p.status;
+      c.title = p.name + ": " + (p.solvedIn ? "solved in " + p.solvedIn : p.status);
+      return;
+    }
+    const ms = elapsedMs(p);
+    if (p.timeLimit) {
+      const left = p.timeLimit * 60000 - ms;
+      c.textContent = paused + (left >= 0 ? fmt(left) + " left" : "+" + fmt(-left) + " over");
+      c.classList.toggle("low", left >= 0 && left < 60000);
+      c.classList.toggle("over", left < 0);
+      if (left < 0 && !p.limitWarned) {
+        p.limitWarned = true; CC.sfx && CC.sfx.play("timer"); scheduleSave(0);
+        addItem({ kind: "sys", icon: "timer", text: "Time limit reached for " + p.name + " (" + p.timeLimit + " min). Keep going if you like - the clock keeps counting." });
+      }
+    } else c.textContent = paused + elapsed(p);
+    c.title = p.name + ": time spent" + (p.timeLimit ? " (limit " + p.timeLimit + " min)" : "") + ". Pauses when you press Pause or switch away from CodeCoach.";
+  }
+  // what the coach is told: the same time the student sees, against the limit if there is one
+  function timeReport(p) {
+    let t = elapsed(p);
+    if (p.timeLimit) { const over = elapsedMs(p) - p.timeLimit * 60000; t += " (limit " + p.timeLimit + " min, " + (over > 0 ? fmt(over) + " over" : "within the limit") + ")"; }
+    const st = sessionCountdown();
+    if (st) t += ". Quiz timer: " + fmt(st.end ? st.end - Date.now() : st.remaining || 0) + " left";
+    return t;
   }
 
   function updateProblemButtons() {
@@ -1352,7 +1390,7 @@
   }
   function resumeClocks() {
     const s = S.session; if (!s || !s.paused) return;
-    s.paused = false; s.userPaused = false;
+    s.paused = false; s.userPaused = false; s.autoPaused = false;
     const p = curProblem();
     if (p && p.status === "open") { migrateClock(p); p.runningSince = Date.now(); }
     const t = s.timer;
@@ -1371,19 +1409,25 @@
     const tb = $("timerBadge"), t = s.timer;
     if (tb && t && !t.fired && t.remaining != null) { const left = Math.round(t.remaining / 1000); tb.textContent = "⏸ " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0"); }
   }
-  // stepping away for more than 5 minutes without pausing: that time doesn't count either
-  let hiddenAt = null;
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { hiddenAt = Date.now(); saveCodeSoon(); return; }
-    if (S.session) { tickClock(); checkRemoteChange(); }
-    const s = S.session, gap = hiddenAt ? Date.now() - hiddenAt : 0; hiddenAt = null;
-    if (!s || s.paused || s.exam || gap < 5 * 60000) return;
-    s.problems.forEach((p) => { if (p.runningSince) p.runningSince += gap; });
-    if (s.timer && !s.timer.fired && s.timer.end) s.timer.end += gap;
-    else if (s.timer && s.timer.fired && !s.problems.some((p) => p.status === "open")) return;
+  // Clocks run only while CodeCoach is the window in front: switching to another app, tab or window pauses them, and
+  // coming back resumes them (unless you had pressed Pause yourself). Exams have their own clock that never pauses.
+  function awayPause() {
+    const s = S.session;
+    if (!s || (s.exam && s.exam.phase !== "graded") || s.paused) return;
+    saveCodeSoon();
+    s.autoPaused = true;
+    pauseClocks(true, "Paused while CodeCoach isn't the window in front.");
     scheduleSave(0);
-    CC.toast("Welcome back - the " + Math.round(gap / 60000) + " min you were away didn't count on the timers.");
-  });
+  }
+  function backResume() {
+    const s = S.session;
+    if (!s) return;
+    tickClock(); checkRemoteChange();
+    if (s.autoPaused && s.paused && !s.userPaused) { s.autoPaused = false; resumeClocks(); }
+  }
+  document.addEventListener("visibilitychange", () => (document.hidden ? awayPause() : backResume()));
+  window.addEventListener("blur", awayPause);
+  window.addEventListener("focus", backResume);
 
   // every finished coding problem is one line in the course's Outcomes.md (learning gain, retention, transfer, trends)
   function logOutcome(p, solved) {
@@ -1403,7 +1447,7 @@
     setTimeout(() => { CC.sfx && CC.sfx.play("solve"); CC.celebrate && CC.celebrate($("pStatement") || document.body, true); }, 120);
     renderProblemTabs(); selectProblem(p.id);
     CC.api("/api/note/save_practice", { folder: S.session.course.folder, topic: p.topic, name: p.name, language: L(), statement: p.statement, code: p.code, result: "solved in " + p.solvedIn + ", " + p.runs + " runs, " + p.hints + " hints" });
-    sendUser("[PROBLEM RESULT] " + p.name + " (R" + p.rung + ", " + p.topic + "): all " + r.total + " tests passed. Time: " + p.solvedIn + ". Test runs: " + p.runs + ". Times I pressed I'm stuck: " + p.hints + ".\nFinal code:\n" + fence(p.code),
+    sendUser("[PROBLEM RESULT] " + p.name + " (R" + p.rung + ", " + p.topic + "): all " + r.total + " tests passed. Time: " + timeReport(p) + ". Test runs: " + p.runs + ". Times I pressed I'm stuck: " + p.hints + ".\nFinal code:\n" + fence(p.code),
       "Submitted " + p.name + " · all " + r.total + " tests passed in " + p.solvedIn);
   }
 
@@ -1411,7 +1455,7 @@
     const p = curProblem(); if (!p || S.busy) return;
     const r = await runCurrent();
     p.hints++;
-    sendUser("[STUCK] " + p.name + " (R" + p.rung + ", " + p.topic + "): " + (r ? (r.stage === "compile" ? "does not compile" : r.passed + "/" + r.total + " tests pass") : "") + ". Time so far: " + elapsed(p) + ".\nMy current code:\n" + fence(p.code) +
+    sendUser("[STUCK] " + p.name + " (R" + p.rung + ", " + p.topic + "): " + (r ? (r.stage === "compile" ? "does not compile" : r.passed + "/" + r.total + " tests pass") : "") + ". Time so far: " + timeReport(p) + ".\nMy current code:\n" + fence(p.code) +
       "\nLatest output:\n```\n" + ((r && r.message) || "").slice(0, 2500) + "\n```", "I'm stuck on " + p.name + (r && r.stage === "run" ? " (" + r.passed + "/" + r.total + " passing)" : ""));
   }
 
@@ -1422,7 +1466,7 @@
     logOutcome(p, false);
     renderProblemTabs(); selectProblem(p.id);
     CC.api("/api/note/save_practice", { folder: S.session.course.folder, topic: p.topic, name: p.name, language: L(), statement: p.statement, code: p.code, result: "gave up after " + elapsed(p) });
-    sendUser("[GAVE UP] " + p.name + " (R" + p.rung + ", " + p.topic + ") after " + elapsed(p) + ". My last code:\n" + fence(p.code), "Gave up on " + p.name);
+    sendUser("[GAVE UP] " + p.name + " (R" + p.rung + ", " + p.topic + ") after " + timeReport(p) + ". My last code:\n" + fence(p.code), "Gave up on " + p.name);
   }
 
   // ================================================================== timer
@@ -1437,10 +1481,12 @@
       if (!t || !badge) return clearInterval(timerInt);
       if (S.session.paused || !t.end) return;
       const left = Math.max(0, Math.round((t.end - Date.now()) / 1000));
-      badge.textContent = Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0");
+      badge.textContent = Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0") + " left";
+      badge.title = (t.label || "Timer") + " - set by your coach. Pauses when you press Pause or switch away from CodeCoach.";
       badge.classList.toggle("low", left < 300);
       if (left === 0 && !t.fired) {
         t.fired = true; badge.textContent = "Time's up"; CC.sfx && CC.sfx.play("timer"); scheduleSave(0); clearInterval(timerInt);
+        setTimeout(tickClock, 4000);                                      // then the clock shows the problem's time again
         const sid = S.session.id;
         const fire = () => { if (!S.session || S.session.id !== sid) return; if (S.busy || S.pending) return setTimeout(fire, 3000); sendUser("[TIMER] Time is up for: " + (t.label || "the timer") + ".", "Time is up"); };
         fire();

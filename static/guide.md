@@ -164,10 +164,13 @@ The key ideas live in `Review Notes.md` in your course folder (Progress → Revi
 
 ### Timers and pausing
 
-- **Problem clock** (top right of the workspace): how long you've spent on this problem. Sent to your coach when you submit, get stuck or give up, saved with your solution, and used to judge timed mastery. If a time limit is set it shows "4m 12s / 10m" and turns amber when you go over.
-- **Countdown** (top bar): only appears when your coach starts one, e.g. in a quiz sim. At 0:00 your coach is told time's up.
-- **Pause** (top bar): freezes both. Typing, running code or sending a message resumes automatically.
-- Time never counts while CodeCoach is closed, while you're on another session, or if the app was in the background for more than 5 minutes.
+There's **one clock**, in the session bar at the top:
+
+- **On a coding problem** it shows how long you've spent on it, the same time your coach gets when you submit, get stuck or give up (and that's saved with your solution and used for timed mastery). If the problem has a time limit it counts down ("6:48 left"), then shows how far over you are ("+0:42 over") in red.
+- **In a quiz sim** it shows the whole quiz's countdown; at 0:00 your coach is told time's up. Each problem's own time is still recorded and sent too.
+- **It only runs while CodeCoach is the window in front.** Switch to another app, tab or window and it pauses ("Paused while CodeCoach isn't the window in front"); come back and it continues by itself.
+- **Pause** (top bar) stops it until you press Resume, type, run code or send a message.
+- Time never counts while CodeCoach is closed or while you're in another session. (Practice exams are the exception: like a real exam, their clock keeps going.)
 
 ### Ending, stopping, coming back
 

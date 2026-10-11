@@ -39,7 +39,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "3.4.0"
+VERSION = "3.4.1"
 # The app's outer layer: bundled Python, Mac window, Windows launcher. Raise this only when CodeCoach's code needs a change
 # there; in-place updates that need a newer outer layer ask for a full download instead.
 SHELL_VERSION = 1
