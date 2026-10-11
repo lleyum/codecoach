@@ -39,7 +39,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "3.4.1"
+VERSION = "3.5.0"
 # The app's outer layer: bundled Python, Mac window, Windows launcher. Raise this only when CodeCoach's code needs a change
 # there; in-place updates that need a newer outer layer ask for a full download instead.
 SHELL_VERSION = 1
@@ -621,7 +621,7 @@ def update_status(cfg, force=False):
     out = {"current": VERSION, "enabled": cfg.get("check_updates", True) is not False}
     if not out["enabled"]:
         return out
-    if force or time.time() - float(st.get("checked_at") or 0) > 24 * 3600:
+    if force or time.time() - float(st.get("checked_at") or 0) > 6 * 3600:          # at launch and every few hours
         repo = UPDATE_REPO
         try:
             with open(os.path.join(STATIC_DIR, "build.json"), encoding="utf-8") as f:
@@ -2326,6 +2326,34 @@ def build_system_prompt(cfg, folder, mode, topic, stats=None):
             block += "\n(Full entries: read_note patterns.)"
         ctx.append(block)
     try:
+        warm = []
+        if files.get("tracker"):
+            rows = table_rows(read_text(os.path.join(folder, files["tracker"])))
+            dt_ = [r.get("topic") for r in rows if r.get("topic") and is_due(r.get("next review"))]
+            if dt_:
+                warm.append("- Tracker topics due for review (%d; warm-up: pick 2-3, those on the next assessment and the most practiced first, one quick item each, "
+                            "then `update_tracker` with `review_outcome`; the rest next session): %s" % (len(dt_), ", ".join(dt_[:12])))
+        if tk:
+            weak = [r.get("task") for r in table_rows(read_text(tk)) if r.get("task") and (re.search(r"new|shaky", r.get("status") or "", re.I) or is_due(r.get("next review")))]
+            if weak:
+                warm.append("- Toolkit lines new/shaky/due (%d; drill 3-5 of them): %s" % (len(weak), "; ".join(weak[:8])))
+        trouble = drill_trouble(cfg, folder)
+        if trouble:
+            warm.append("- LINES THAT KEEP SLIPPING (missed in 2+ drills; don't just drill them again - use the Slipping lines routine):\n" +
+                        "\n".join("  - `%s`%s: missed %d of %d" % (t["line"], " (" + t["task"] + ")" if t["task"] else "", t["misses"], t["tries"]) for t in trouble[:5]))
+        opened = [dict(p, title=s.get("title")) for s in list_sessions(cfg, folder, full=True) if s.get("id") for p in (s.get("open") or [])]
+        if opened:
+            warm.append("- Unfinished problems from earlier sessions (offer to finish one when it fits): " +
+                        ", ".join("%s (%s, in \"%s\")" % (p["name"], p.get("topic") or "", p["title"]) for p in opened[:4]))
+        na = next_assessment(folder)
+        if na["stale"]:
+            warm.append("- The course profile's Next assessment looks out of date (%s). At the start, ask once what's next and when, then `update_next_assessment`." %
+                        ("empty" if not na["text"] else "\"" + na["text"][:120] + "\"" + (", date passed" if na["date"] else ", no date")))
+        if warm and mode not in ("exam", "quizsim"):
+            ctx.append("\n## START OF SESSION (computed by the app today)\n" + "\n".join(warm))
+    except Exception as e:
+        print("warm-up block skipped: %s" % e)
+    try:
         due = retention_due(outcome_events(folder))
     except Exception:
         due = []
@@ -2755,7 +2783,10 @@ def dashboard(cfg, folder):
             "week_saved": round(sum(usage.get(x, {}).get("saved", 0) for x in week), 4),
             "estimated": any(usage.get(x, {}).get("estimated") for x in week),
             "unpriced": sum(usage.get(x, {}).get("unpriced", 0) for x in week),
-            "prices_updated": load_prices().get("updated", "")}
+            "prices_updated": load_prices().get("updated", ""),
+            "open_problems": [dict(p, session=s["id"], title=s.get("title"), updated=s.get("updated"))
+                              for s in list_sessions(cfg, folder, full=True) for p in (s.get("open") or [])][:6],
+            "assessment": next_assessment(folder)}
 
 
 SESSION_META = {}            # path -> ((mtime, size), summary): only new or changed session files are re-read
@@ -2780,7 +2811,11 @@ def session_summary(path):
                 "course": c.get("name"), "folder": c.get("folder", ""), "rel": c.get("rel", ""),
                 "file": os.path.basename(path), "rev": int(s.get("rev") or 0), "device": s.get("device", ""),
                 "device_name": s.get("device_name", ""), "messages": len(s.get("messages", [])),
-                "solved": sum(1 for p in s.get("problems", []) if p.get("status") == "solved"), "problems": len(s.get("problems", []))}
+                "solved": sum(1 for p in s.get("problems", []) if p.get("status") == "solved"), "problems": len(s.get("problems", [])),
+                "open": [{"name": p.get("name"), "topic": p.get("topic"), "rung": p.get("rung")} for p in s.get("problems", [])
+                         if p.get("status") == "open" and not s.get("exam")],
+                "drills": [{"key": d.get("task") or line_shape(d.get("reference_answer")), "line": d.get("reference_answer"), "task": d.get("task") or "",
+                            "correct": d.get("correct")} for d in s.get("display", []) if d.get("kind") == "drill" and d.get("correct") is not None]}
     with SESSION_META_LOCK:
         SESSION_META[path] = (key, summ)
     return summ
@@ -2817,7 +2852,77 @@ def check_rev(cfg, cur, base_rev):
     return None
 
 
-def list_sessions(cfg, folder):
+KEEP_WORDS = set("""new return true false null this super int long double float boolean char byte short void var final String Integer
+Double Character Boolean Long List ArrayList Map HashMap Set HashSet TreeMap TreeSet Arrays Collections Math System out for while if else
+def in not and or len range print None True False""".split())
+
+
+def line_shape(code):
+    """A drill line with its own names blanked out: `counts.put(word, counts.getOrDefault(word, 0) + 1);` and
+    `map.put(w, map.getOrDefault(w, 0) + 1);` are the same line to learn."""
+    c = re.sub(r"\b([A-Za-z_]\w*)\b(?!\s*\()", lambda m: m.group(1) if m.group(1) in KEEP_WORDS or m.group(0)[0].isupper() else "x", code or "")
+    return re.sub(r"\s+", "", c)
+
+
+def drill_trouble(cfg, folder):
+    """Drill lines missed at least twice and not yet recalled 3 times in a row since, oldest sessions first."""
+    hist = {}
+    for s in sorted(list_sessions(cfg, folder, full=True), key=lambda x: x.get("updated") or ""):
+        for d in s.get("drills") or []:
+            if d["key"]:
+                h = hist.setdefault(d["key"], {"line": d["line"], "task": d["task"], "results": []})
+                h["line"], h["task"] = d["line"] or h["line"], d["task"] or h["task"]
+                h["results"].append(bool(d["correct"]))
+    out = []
+    for h in hist.values():
+        r = h["results"]
+        misses = r.count(False)
+        if misses >= 2 and r[-3:] != [True, True, True]:
+            out.append({"line": h["line"], "task": h["task"], "misses": misses, "tries": len(r)})
+    return sorted(out, key=lambda x: -x["misses"])
+
+
+ASSESS_RE = re.compile(r"^([ \t]*[-*]?[ \t]*\*\*Next assessment:\*\*[ \t]*)(.*)$", re.M)
+MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split()
+
+
+def next_assessment(folder):
+    """The course profile's "Next assessment" line, and whether it looks out of date (no date, or the date has passed)."""
+    m = ASSESS_RE.search(read_text(os.path.join(folder, "_course.md")))
+    text = (m.group(2).strip() if m else "")
+    if text.startswith("(") and text.endswith(")"):
+        text = ""
+    date = None
+    d = re.search(r"\b(20\d\d)-(\d{1,2})-(\d{1,2})\b", text)
+    try:
+        if d:
+            date = dt.date(int(d.group(1)), int(d.group(2)), int(d.group(3)))
+        else:
+            d = re.search(r"\b(" + "|".join(MONTHS) + r")[a-z]*\.?\s+(\d{1,2})\b", text, re.I) or re.search(r"\b(\d{1,2})/(\d{1,2})\b", text)
+            if d:
+                mon = MONTHS.index(d.group(1)[:3].lower()) + 1 if d.group(1)[:1].isalpha() else int(d.group(1))
+                date = dt.date(dt.date.today().year, mon, int(d.group(2)))
+                if (dt.date.today() - date).days > 180:            # "Jan 12" written in December means next year
+                    date = date.replace(year=date.year + 1)
+    except ValueError:
+        date = None
+    stale = not text or date is None or date < dt.date.today()
+    return {"text": text, "date": date.isoformat() if date else "", "stale": stale}
+
+
+def set_next_assessment(folder, text):
+    path = os.path.join(folder, "_course.md")
+    body = read_text(path)
+    line = re.sub(r"[\r\n]+", " ", text or "").strip() or "(update when known)"
+    if ASSESS_RE.search(body):
+        body = ASSESS_RE.sub(lambda m: m.group(1) + line.replace("\\", "\\\\"), body, count=1)
+    else:
+        body = body.rstrip() + "\n- **Next assessment:** " + line + "\n"
+    write_text(path, body)
+    return next_assessment(folder)
+
+
+def list_sessions(cfg, folder, full=False):
     d = os.path.join(sync_dir(cfg), "sessions")
     names = [n for n in os.listdir(d) if n.endswith(".md")]
     live = {os.path.join(d, n) for n in names}
@@ -2837,7 +2942,7 @@ def list_sessions(cfg, folder):
             # courses can live at different absolute paths on different computers - match on the Library-relative part
             if not s["rel"] or os.path.realpath(from_rel(cfg["vault"], s["rel"])) != want:
                 continue
-        items.append(dict({k: s[k] for k in ("id", "title", "mode", "updated", "course", "solved", "problems")}, versions=len(copies.get(s["id"], []))))
+        items.append(s if full else dict({k: s[k] for k in ("id", "title", "mode", "updated", "course", "solved", "problems")}, versions=len(copies.get(s["id"], []))))
     items.sort(key=lambda s: s.get("updated") or "", reverse=True)
     return items
 
@@ -3318,6 +3423,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not path:
                     return self.send_json({"error": "This course has no %s note." % kind})
                 return self.send_json({"note": os.path.basename(path), "text": read_text(path, 30000)})
+            if p == "/api/course/assessment":
+                return self.send_json(set_next_assessment(folder, b.get("text") or ""))
             if p == "/api/note/review":
                 path = os.path.join(folder, files.get("review") or "Review Notes.md")
                 if not os.path.exists(path):

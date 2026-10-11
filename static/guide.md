@@ -87,11 +87,15 @@ People really do differ - mostly in **what they already know**, their goals, pac
 Your home screen - it answers "what should I do now?".
 
 - **Stats:** streak, reviews due, topics mastered, Toolkit lines solid, problems solved this week.
+- **Next assessment:** if your course profile has no date for your next quiz or exam, or the date has passed, Today asks. **Update** takes a few seconds; **Still right** hides it for a week. Your coach plans around it.
 - **Up next:** the next unchecked item on your roadmap, with **Learn it**. If your roadmap is empty, **Plan my roadmap** has your coach build one.
 - **Spaced review:** everything due, each with **Review**; **Review all** does them in one mixed session.
+- **Unfinished problems:** coding problems you left open in earlier sessions, each with **Finish it**.
 - **Recent sessions:** **Resume** puts you back exactly where you stopped.
 - **Mastery:** a bar per topic (R0-R6, green = mastered).
-- **Quick start:** syntax drills, quiz simulation, Playground, Materials, Notes.
+- **Quick start:** syntax drills, quiz simulation, practice exam, Quick review, Playground, Materials, Notes.
+
+**How every session starts:** a warm-up of about 5 minutes on what's due (a few Toolkit lines, one quick question per topic due for review, and those reviews are recorded). A line you've missed in two or more drills gets a different approach: your coach splits it into parts, has you type variations of it and uses it in a small fill-in. On a new topic your coach makes sure you know the words (field, constructor, parameter...) before showing code.
 
 ## Study sessions
 
@@ -313,7 +317,7 @@ Optional sounds, all generated inside the app (no audio files), tuned to stay su
   - **Conflict copies:** when a sync service can't merge two edits it keeps both files ("conflicted copy", "name 2", "-LAPTOP", "sync-conflict"). CodeCoach shows these as one session with "2 versions" and asks once you open it: **Compare**, **Use newest**, or **Keep both**. Replaced versions go to `CodeCoach/trash`, never deleted.
 - **Per computer only:** API keys, which AI, Library location, theme and look, Playground drafts. Keys are never stored in the Library or in exports.
 - **Export everything:** Welcome (or Settings → Library & sync) → **Export everything** makes one zip of every course, solution, session and setting (minus keys), with a note on how to restore it.
-- **Updates:** once a day CodeCoach asks GitHub whether a newer version exists (nothing about you is sent). If there is one, an **Update available** button appears at the bottom of the sidebar with what's new. Press **Update now**: CodeCoach downloads the new version (a few MB), checks it isn't damaged, and restarts on it, usually in under ten seconds, right back where you were. Your Library and settings are never touched.
+- **Updates:** when it opens and every few hours, CodeCoach asks GitHub whether a newer version exists (nothing about you is sent). If there is one, a small notice pops up in the corner (and an **Update available** button stays at the bottom of the sidebar) with **What's new** and **Update now**. After updating, a **What's new** list shows once. Press **Update now**: CodeCoach downloads the new version (a few MB), checks it isn't damaged, and restarts on it, usually in under ten seconds, right back where you were. Your Library and settings are never touched.
   - Once in a while an update changes the app itself; then it says so and offers a **Full download** (replace the app in Applications or run the installer).
   - If an update ever fails to start, CodeCoach goes back to the version it had automatically. **Settings → App → Undo this update** does the same by hand.
   - **Skip this version**, **Later**, or turn checking off in Settings → App.

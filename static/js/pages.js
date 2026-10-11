@@ -13,6 +13,25 @@
   const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
 
   // ================================================================== TODAY
+  function editAssessment(c, as, done) {
+    const what = h("input", { type: "text", placeholder: "e.g. Quiz 6", value: (as.text || "").replace(/\s*(on|-|·)?\s*\d{4}-\d{2}-\d{2}.*$/, "") });
+    const when = h("input", { type: "date", value: as.date && as.date >= CC.today() ? as.date : "" });
+    const topics = h("input", { type: "text", placeholder: "e.g. constructors, getters/setters, static" });
+    const save = async () => {
+      if (!what.value.trim()) return what.focus();
+      const text = what.value.trim() + (when.value ? " on " + when.value : "") + (topics.value.trim() ? " - " + topics.value.trim() : "");
+      const r = await CC.api("/api/course/assessment", { folder: c.folder, text });
+      if (r.error) return CC.toast(r.error, true);
+      CC.closeModal(); CC.toast("Saved. Your coach plans around " + text + "."); done && done();
+    };
+    CC.modal("Next assessment", h("div", { class: "stack" },
+      h("p", { class: "muted small", style: { margin: 0 }, text: "Saved in your course profile (_course.md). Your coach uses it to choose what to practice and when." }),
+      h("div", { class: "field" }, h("label", { text: "What" }), what), h("div", { class: "field" }, h("label", { text: "Date" }), when),
+      h("div", { class: "field" }, h("label", { text: "Topics (optional)" }), topics)),
+      [h("button", { class: "btn ghost", text: "Cancel", onclick: CC.closeModal }), h("button", { class: "btn primary", text: "Save", onclick: save })]);
+  }
+  CC.editAssessment = editAssessment;
+
   CC.views.today = {
     async show() {
       const inner = page("view-today");
@@ -40,6 +59,17 @@
         stat(d.toolkit.solid + " / " + d.toolkit.total, "Toolkit solid", "bolt"),
         stat(d.week_solved, "Solved this week", "check")));
 
+      // is the next assessment still right? (no date, or the date has passed)
+      const as = d.assessment || {}, snoozeKey = "assessOk_" + c.folder;
+      const snooze = CC.local.get(snoozeKey, null);          // "Still right" quiets it for a week (for that same text)
+      if (as.stale && !(snooze && snooze.text === as.text && snooze.until > Date.now())) {
+        const card = h("div", { class: "banner assess" }, h("span", { html: icon("flag") }),
+          h("span", { text: as.text ? "Next assessment: " + as.text + (as.date ? " (that date has passed)" : "") + ". Still right?" : "When is your next quiz or exam? Your coach plans around it." }),
+          h("span", { class: "spacer" }),
+          as.text ? btn("Still right", null, () => { CC.local.set(snoozeKey, { text: as.text, until: Date.now() + 7 * 864e5 }); card.remove(); }, "sm ghost") : null,
+          btn("Update", "edit", () => editAssessment(c, as, () => CC.views.today.show()), "sm primary"));
+        inner.appendChild(card);
+      }
       const left = h("div", { class: "stack" }), right = h("div", { class: "stack" });
       inner.appendChild(h("div", { class: "today-grid" }, left, right));
 
@@ -69,6 +99,17 @@
           btn("Review all " + due.length, "refresh", () => CC.go("study", { fresh: true, mode: "review", topic: due.map((t) => t.topic).join(", ") }), "sm primary")));
       } else dueCard.appendChild(h("p", { class: "muted small", text: "Nothing due. Topics come back here when their review is due, with the gap growing each time you pass (2, 5, 12, 30, 75 days...)." }));
       left.appendChild(dueCard);
+
+      // problems left open in earlier sessions
+      if ((d.open_problems || []).length) {
+        const oc = h("div", { class: "card" }, h("h3", { html: icon("code") + "Unfinished problems" }));
+        const list = h("div", { class: "list" });
+        d.open_problems.forEach((p) => list.appendChild(h("div", { class: "item" }, h("span", { class: "chip", text: "R" + (p.rung || "?") }),
+          h("span", { class: "t", text: p.name }), h("span", { class: "tiny muted", text: (p.topic || "") + " · " + CC.fmtTime(p.updated) }),
+          btn("Finish it", "arrow", () => { CC.go("study"); CC.resumeSession(p.session); }, "sm"))));
+        oc.appendChild(list);
+        left.appendChild(oc);
+      }
 
       // Recent sessions
       const sc = h("div", { class: "card" }, h("h3", { html: icon("chat") + "Recent sessions" }));

@@ -117,6 +117,46 @@ class SessionTest(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_today_assessment_unfinished_and_whats_new(self):
+        with App() as app, sync_playwright() as p:
+            f = app.make_course("python", "Python track")
+            app.api("/api/session/save", {"id": "old1", "title": "Monday", "mode": "learn", "course": {"name": "Python track", "folder": f},
+                                          "messages": [], "display": [], "usage": {"cost": 0, "tokens": 0},
+                                          "problems": [dict(PROBLEM, id="p1", status="open", code=PROBLEM["starter_code"], starter=PROBLEM["starter_code"],
+                                                            tests=PROBLEM["test_code"], activeMs=0, runs=0, hints=0)]})
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            try:
+                page.goto(app.base + "/")
+                page.evaluate("localStorage.setItem('cc_seenVersion', JSON.stringify('3.4.1'))")
+                page.reload()
+                page.wait_for_selector("#modal >> text=What's new in CodeCoach", timeout=10000)
+                self.assertIn("Warm-ups that clear your reviews", page.inner_text("#modal"))
+                page.click("#modal >> text=Got it")
+                page.reload()
+                page.wait_for_selector("#view-today .stats", timeout=15000)
+                page.wait_for_timeout(1200)
+                self.assertFalse(page.is_visible("#modal >> text=What's new"))         # only once
+                # next assessment
+                page.click("#view-today .banner.assess >> text=Update")
+                page.fill("#modal input[placeholder='e.g. Quiz 6']", "Quiz 6")
+                page.fill("#modal input[type=date]", (__import__("datetime").date.today() + __import__("datetime").timedelta(days=5)).isoformat())
+                page.click("#modal .modal-foot >> text=Save")
+                page.wait_for_timeout(800)
+                self.assertEqual(page.locator("#view-today .banner.assess").count(), 0)
+                self.assertIn("Quiz 6 on", server_read(os.path.join(f, "_course.md")))
+                # unfinished problem
+                page.click("#view-today >> text=Finish it")
+                page.wait_for_selector("#pStatement >> text=greater than 0", timeout=10000)
+                self.assertEqual(errors, [])
+            except Exception:
+                page.screenshot(path=os.path.join(os.environ.get("E2E_SHOTS", app.home), "e2e-failure.png"))
+                raise
+            finally:
+                browser.close()
+
     def test_quick_review(self):
         with App() as app, sync_playwright() as p:
             app.make_course("python", "Python track")

@@ -113,8 +113,7 @@ class UpdateTest(unittest.TestCase):
                 b = p.chromium.launch()
                 page = b.new_page()
                 page.goto(app.base + "/")
-                page.click("#updateChip", timeout=15000)
-                page.click("#modal .modal-foot >> text=Update now")
+                page.click("#updateNotice >> text=Update now", timeout=15000)          # the notice comes up by itself
                 page.wait_for_selector("text=Updated to CodeCoach 9.9.0", timeout=40000)
                 b.close()
         finally:

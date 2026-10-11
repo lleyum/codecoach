@@ -937,3 +937,11 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket { color: var(--bad) !important
 .review-panel .rv-md h2 { font-size: 15px; }
 #reviewBtn.on { background: var(--accent-soft); color: var(--accent-text); }
 @media (max-width: 900px) { .rv-layout { grid-template-columns: 1fr; } .rv-pick { position: static; max-height: 320px; } }
+
+/* ---------- update notice */
+.update-notice { position: fixed; right: 18px; bottom: 18px; z-index: 60; width: 320px; max-width: calc(100vw - 36px); display: flex; flex-direction: column; gap: 10px;
+  background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: var(--radius); padding: 12px 14px;
+  box-shadow: var(--shadow, 0 12px 32px -12px rgba(0,0,0,.35)); animation: rise .2s var(--ease); }
+.update-notice svg { width: 16px; height: 16px; color: var(--accent-text); }
+.update-notice b { font-size: 13.5px; }
+.banner.assess { margin-bottom: 4px; }

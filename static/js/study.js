@@ -666,7 +666,9 @@
       parameters: { type: "object", properties: { name: { type: "string" }, markdown: { type: "string" } }, required: ["name", "markdown"] } } },
     { type: "function", function: { name: "append_blueprint", description: "Append findings about the class's assessment format to the Blueprint note.",
       parameters: { type: "object", properties: { markdown: { type: "string" } }, required: ["markdown"] } } },
-    { type: "function", function: { name: "update_review_notes", description: "Keep the student's review sheet for a topic current: the key ideas they'd reread before a quiz. 3-8 short bullets in plain words plus 1-2 small code examples in the course language. Replaces that topic's section, so include what's still true. Call after teaching a concept and when a problem shows something worth remembering.",
+    { type: "function", function: { name: "update_next_assessment", description: "Set the course profile's Next assessment line, e.g. 'Quiz 6 on 2026-10-16 - Objects: constructors, getters/setters, static'. Include a date (YYYY-MM-DD) and the topics.",
+      parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
+    { type: "function", function: { name: "update_review_notes", description: "Keep the student's review sheet for a topic current: the key ideas they'd reread before a quiz. Start with a **Terms** list (each key word with a one-line plain definition and where it appears in code), then 3-8 short bullets in plain words plus 1-2 small code examples in the course language. Replaces that topic's section, so include what's still true. Call after teaching a concept and when a problem shows something worth remembering.",
       parameters: { type: "object", properties: { topic: { type: "string", description: "Tracker topic name" }, markdown: { type: "string" } }, required: ["topic", "markdown"] } } },
     { type: "function", function: { name: "update_roadmap", description: "Replace the whole Roadmap note (title, units, - [ ] / - [x] topic checklists). Keep existing checkmarks.",
       parameters: { type: "object", properties: { markdown: { type: "string" } }, required: ["markdown"] } } },
@@ -724,7 +726,7 @@
         return { error: "Drill rejected: with your reference answer the harness printed " + JSON.stringify(normOut(ref.stdout)) + (ref.stderr ? " (stderr: " + ref.stderr.slice(0, 600) + ")" : "") +
           " but expected_output is " + JSON.stringify(normOut(a.expected_output)) + ". Fix it and call drill again." };
       }
-      const it = { kind: "drill", prompt: a.prompt, harness: a.harness, expected_output: a.expected_output, reference_answer: a.reference_answer };
+      const it = { kind: "drill", prompt: a.prompt, harness: a.harness, expected_output: a.expected_output, reference_answer: a.reference_answer, task: a.toolkit_task || "" };
       let card; const p = new Promise((res) => { card = drillCard(it, res); });
       const r = await Promise.race([p, waitFor(card)]);
       S.pending = null; clearHint();
@@ -828,6 +830,12 @@
     async save_pattern(a) { return noteOp("/api/note/pattern", a, "Pattern Library · " + a.name, "brain"); },
     async append_blueprint(a) { return noteOp("/api/note/blueprint", a, "Blueprint updated", "file"); },
     async update_roadmap(a) { return noteOp("/api/note/roadmap", a, "Roadmap updated", "flag"); },
+    async update_next_assessment(a) {
+      const r = await CC.api("/api/course/assessment", { folder: S.session.course.folder, text: a.text });
+      if (r.error) return { error: r.error };
+      addItem({ kind: "sys", icon: "flag", text: "Next assessment · " + a.text });
+      return { saved: true, date: r.date || "(no date found - include YYYY-MM-DD)" };
+    },
     async update_review_notes(a) { const r = await noteOp("/api/note/review", a, "Review sheet · " + a.topic, "book"); CC.review && CC.review.invalidate(); return r; },
   };
 

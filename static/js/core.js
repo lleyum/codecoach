@@ -352,7 +352,9 @@
 
   // ------------------------------------------------------------------ update check (at most once a day; Settings > App turns it off)
   let laterThisLaunch = false;
+  let lastUpdateCheck = 0, noticed = "";
   CC.checkUpdate = async function (manual) {
+    lastUpdateCheck = Date.now();
     const u = await CC.api("/api/update" + (manual ? "?force=1" : ""));
     const chip = CC.$("updateChip");
     if (u.error || !chip) { if (manual) CC.toast("Couldn't check for updates right now.", true); return; }
@@ -360,11 +362,26 @@
       chip.innerHTML = CC.icon("download") + "<span>Update available: " + MD.esc(u.latest) + "</span>";
       chip.classList.remove("hidden");
       chip.onclick = () => showUpdate(u);
+      if (!manual && noticed !== u.latest) { noticed = u.latest; updateNotice(u); }      // once per version per launch
     } else chip.classList.add("hidden");
     if (manual) CC.toast(u.available ? "CodeCoach " + u.latest + " is available." : u.latest ? "You're up to date (" + u.current + ")." : "Couldn't reach GitHub - try again later.");
   };
-  function showUpdate(u) {
-    const notes = MD.into(h("div", { class: "md update-notes" }), u.notes || "See the release page for what's new.");
+  // a small card in the corner: there's a new version (no need to press Check now)
+  function updateNotice(u) {
+    const old = CC.$("updateNotice"); if (old) old.remove();
+    if (document.body.classList.contains("exam-lock")) { noticed = ""; return; }      // not in the middle of an exam
+    const card = h("div", { class: "update-notice", id: "updateNotice", role: "status" },
+      h("div", { class: "row" }, h("span", { html: CC.icon("download") }), h("b", { text: "CodeCoach " + u.latest + " is available" }), h("span", { class: "spacer" }),
+        h("button", { class: "btn icon ghost sm", html: CC.icon("x"), title: "Later", onclick: () => { laterThisLaunch = true; card.remove(); } })),
+      h("div", { class: "row" },
+        h("button", { class: "btn sm ghost", text: "What's new", onclick: () => { card.remove(); showUpdate(u); } }),
+        h("span", { class: "spacer" }),
+        h("button", { class: "btn sm primary", text: u.installable ? "Update now" : "Download", onclick: () => { card.remove(); showUpdate(u, true); } })));
+    document.body.appendChild(card);
+  }
+  const releaseNotes = (t) => String(t || "").split(/\n## Download/)[0].replace(/^## What's new\s*/, "").trim();
+  function showUpdate(u, go) {
+    const notes = MD.into(h("div", { class: "md update-notes" }), releaseNotes(u.notes) || "See the release page for what's new.");
     const msg = h("p", { style: { margin: 0 }, text: u.installable ? "You have " + u.current + ". Update now: CodeCoach downloads the new version (a few MB), checks it and restarts. Your sessions, notes and settings stay as they are."
       : "You have " + u.current + ". Download the new version, then replace CodeCoach in your Applications folder (or run the new installer). Your Library and settings stay as they are." });
     const download = h("a", { class: "btn " + (u.installable ? "ghost" : "primary"), href: u.url, target: "_blank", rel: "noopener", html: CC.icon("download") + "<span>" + (u.installable ? "Full download" : "Download") + "</span>" });
@@ -373,7 +390,27 @@
       [h("button", { class: "btn ghost", text: "Skip this version", onclick: async () => { await CC.api("/api/update/skip", { version: u.latest }); CC.$("updateChip").classList.add("hidden"); CC.closeModal(); CC.toast("You won't be reminded about " + u.latest + "."); } }),
        h("button", { class: "btn ghost", text: "Later", onclick: () => { laterThisLaunch = true; CC.$("updateChip").classList.add("hidden"); CC.closeModal(); } }),
        h("span", { class: "spacer" }), download, now], { sticky: true });
+    if (go && now) now.click();
   }
+  // after an update (one-click or a fresh download): show what changed, once
+  async function whatsNew(returning) {
+    const cur = S.state.version;
+    let seen = CC.local.get("seenVersion", null);
+    if (!seen && returning) seen = "3.4.1";                    // used CodeCoach before versions were remembered
+    CC.local.set("seenVersion", cur);
+    if (!seen || seen === cur || CC.versionNum(seen) > CC.versionNum(cur)) return false;
+    let text = "";
+    try { text = await (await fetch("/static/changelog.md", { cache: "no-store" })).text(); } catch (e) { return false; }
+    const parts = text.split(/\n(?=## )/).slice(1).filter((p) => {
+      const v = (p.match(/^## ([\d.]+)/) || [])[1];
+      return v && CC.versionNum(v) > CC.versionNum(seen) && CC.versionNum(v) <= CC.versionNum(cur);
+    });
+    if (!parts.length) return false;
+    CC.modal("What's new in CodeCoach " + cur, MD.into(h("div", { class: "md update-notes" }), parts.join("\n\n").replace(/^## ([\d.]+)/gm, "### $1")),
+      [h("span", { class: "spacer" }), h("button", { class: "btn primary", text: "Got it", onclick: CC.closeModal })], { wide: true });
+    return true;
+  }
+  CC.versionNum = (v) => String(v || "").replace(/^v/, "").split(".").reduce((a, n) => a * 1000 + (parseInt(n, 10) || 0), 0);
   // restart into the new version: save everything, ask the server to restart, wait for it, reload the page
   CC.restartApp = async function (expect, status) {
     if (CC.flushSave) CC.flushSave();
@@ -472,8 +509,15 @@
       try { history.replaceState(null, "", "/"); } catch (e) { /* ignore */ }
       setTimeout(() => CC.toast("macOS restarted CodeCoach's page (usually to free memory). Your session, code and draft are back where you left them."), 900);
     }
+    const returning = CC.local.get("guide_seen", false);      // read before this launch marks the guide as seen
     const upd = CC.local.get("justUpdated", null);
-    if (upd) { CC.local.set("justUpdated", null); setTimeout(() => CC.toast(upd === S.state.version ? "Updated to CodeCoach " + upd + "." : "Restarted - running CodeCoach " + S.state.version + "."), 800); }
+    if (upd) CC.local.set("justUpdated", null);
+    setTimeout(async () => {
+      const shown = await whatsNew(returning);
+      if (upd && !shown) CC.toast(upd === S.state.version ? "Updated to CodeCoach " + upd + "." : "Restarted - running CodeCoach " + S.state.version + ".");
+    }, 700);
+    // check again when the window comes back after a few hours (the server asks GitHub at most every 6 hours)
+    window.addEventListener("focus", () => { if (Date.now() - lastUpdateCheck > 3 * 3600e3) CC.checkUpdate(false); });
     if (!CC.local.get("guide_seen", false)) { CC.local.set("guide_seen", true); setTimeout(() => CC.toast("New: \"How to use\" in the sidebar explains everything CodeCoach does."), 1200); }
     CC.usageLine();
   };
