@@ -54,6 +54,19 @@
     return out.filter(Boolean).join("\n\n");
   }
 
+  // ---------------------------------------------------------------- coverage sheet: everything the next assessment can ask
+  function coverageMd(cv) {
+    const out = ["# " + cv.assessment + ": what it can ask", "*" + cv.solid + " of " + cv.total + " skills solid" + (cv.practicing ? " · " + cv.practicing + " practicing" : "") + (cv.gaps.length ? " · " + cv.gaps.length + " not practiced yet" : "") + "*"];
+    const group = (st, title) => {
+      const rows = cv.rows.filter((r) => r.status === st);
+      if (rows.length) out.push("## " + title, "| Skill | Ways it's asked | From |\n| --- | --- | --- |\n" + rows.map((r) => "| " + cell(r.skill) + " | " + cell(r.ways) + " | " + cell(r.source) + " |").join("\n"));
+    };
+    group("gap", "Not practiced yet");
+    group("practicing", "Practicing");
+    group("solid", "Solid");
+    return out.join("\n\n");
+  }
+
   // ---------------------------------------------------------------- session sheet (markdown, from the session itself)
   function sessionTopics(s) {
     const seen = new Map();
@@ -129,10 +142,14 @@
     const folder = S.course.folder;
     const [tp, ss] = await Promise.all([CC.api("/api/review/topics", { folder }), CC.api("/api/sessions?" + CC.q({ folder }))]);
     R.topics = tp.topics || []; R.sessions = ss.sessions || [];
+    const cv = await CC.api("/api/coverage", { folder });
+    R.cov = cv && cv.exists && cv.total ? cv : null;
     function drawList() {
       list.innerHTML = "";
       const q = R.q.trim().toLowerCase();
       const rows = R.tab === "topics" ? R.topics.filter((t) => !q || t.topic.toLowerCase().includes(q)) : R.sessions.filter((s) => !q || (s.title || "").toLowerCase().includes(q));
+      if (R.tab === "topics" && R.cov && !q) list.appendChild(h("button", { class: "rv-row cov" + (R.sel && R.sel.coverage ? " on" : ""), onclick: () => { R.sel = { coverage: true }; drawList(); drawSheet(); } },
+        h("span", { class: "t", text: R.cov.assessment + ": everything it covers" }), h("span", { class: "tiny muted", text: R.cov.solid + "/" + R.cov.total + " solid" })));
       if (!rows.length) list.appendChild(h("div", { class: "hint", text: R.tab === "topics" ? "No topics yet. They appear as you study." : "No sessions yet." }));
       rows.forEach((r) => {
         const on = R.sel && (R.tab === "topics" ? R.sel.topic === r.topic : R.sel.session === r.id);
@@ -146,7 +163,13 @@
       if (!R.sel) { sheet.appendChild(h("div", { class: "empty" }, h("div", { html: CC.icon("book") }), h("h3", { text: "Pick a topic or a session" }), h("p", { text: "Topics due for review are marked ●." }))); return; }
       sheet.appendChild(h("div", { class: "row" }, h("span", { class: "dots" }, h("span"), h("span"), h("span"))));
       let md, practice = null;
-      if (R.sel.topic) {
+      if (R.sel.coverage) {
+        const cv = await CC.api("/api/coverage", { folder });
+        if (!cv.exists) { sheet.textContent = "No coverage map yet."; return; }
+        md = coverageMd(cv);
+        const rest = cv.rows.filter((r) => r.status !== "solid");
+        if (rest.length) practice = () => CC.go("study", { fresh: true, mode: "learn", topic: cv.assessment + ": " + rest.slice(0, 3).map((r) => r.skill).join(", ") });
+      } else if (R.sel.topic) {
         const d = await topicData(folder, R.sel.topic, true);
         if (d.error) { sheet.textContent = d.error; return; }
         md = topicMd(d);

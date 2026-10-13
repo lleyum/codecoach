@@ -1,5 +1,14 @@
 # What's new in CodeCoach
 
+## 3.6.0
+
+- **Practice that looks like your quiz.** For classes, your coach now takes topics from the whole unit and question styles from the practice quiz and past quizzes. Each skill gets asked at least two ways (one the practice quiz doesn't use), and it only goes deeper once you can do the quiz-style version.
+- **Coverage map.** Your coach lists everything your next quiz can ask and tracks which skills are solid. Today shows it ("Quiz 6: 7/12 skills solid") with **Study the gaps**; it's also in Quick review, Progress and practice exams.
+- **Tests that are right the first time.** For harder problems your coach also writes a few near-miss wrong answers, and the problem is only given to you if every one of them fails. Loose tests get fixed before you see the problem, not halfway through.
+- **Whole Java classes.** Problems can ask for a full `public class X { ... }` like the real quiz, and tests check the exact signatures (public/private, static, return and parameter types), naming what's off.
+- **Clearer errors.** If your code compiles but doesn't match the signature the problem asks for, you're told what to change (e.g. "`winner` should be `static`") instead of "test setup problem".
+- **Add the materials for your next quiz.** When your next quiz has no lessons or practice quiz in Materials, Today asks for them.
+
 ## 3.5.0
 
 - **Warm-ups that clear your reviews.** Every session starts with about 5 minutes on what's due: a few toolkit lines and one quick question per topic due for review, and those reviews now get recorded, so topics stop sitting at "due".

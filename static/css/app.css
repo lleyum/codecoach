@@ -945,3 +945,7 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket { color: var(--bad) !important
 .update-notice svg { width: 16px; height: 16px; color: var(--accent-text); }
 .update-notice b { font-size: 13.5px; }
 .banner.assess { margin-bottom: 4px; }
+.banner.mats { margin-bottom: 4px; }
+.cov-card .bar { margin: 2px 0 10px; }
+.cov-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.rv-row.cov .t { font-weight: 600; }

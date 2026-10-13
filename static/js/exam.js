@@ -25,7 +25,8 @@
         points: { type: "number" } }, required: ["topic", "prompt", "options", "correct_index", "explanation"] } },
       problems: { type: "array", description: "Coding problems", items: { type: "object", properties: {
         name: { type: "string" }, topic: { type: "string" }, statement: { type: "string", description: "Markdown statement with examples, in the course's style" },
-        starter_code: { type: "string" }, reference_solution: { type: "string" }, test_code: { type: "string" }, points: { type: "number" } },
+        starter_code: { type: "string" }, reference_solution: { type: "string" }, test_code: { type: "string" }, points: { type: "number" },
+        wrong_solutions: { type: "array", description: "1-3 near-miss wrong solutions; each must fail a test", items: { type: "object", properties: { code: { type: "string" }, why: { type: "string" } } } } },
         required: ["name", "topic", "statement", "starter_code", "reference_solution", "test_code"] } } },
       required: ["title", "questions", "problems"] } } };
 
@@ -88,7 +89,7 @@
       const spec = ex.spec;
       const msgs = [{ role: "system", content: sp.prompt }, { role: "user", content:
         "[BUILD EXAM] Build a " + spec.minutes + "-minute practice exam with " + spec.mc + " multiple-choice question(s) and " + spec.coding + " coding problem(s). " +
-        "Topics: " + (ex.topics || "choose from my tracker (due and recently learned topics first) and the class blueprint") + ". " +
+        "Topics: " + (ex.topics || "choose from my tracker (due and recently learned topics first), the coverage map if there is one (weight its gaps) and the class blueprint") + ". " +
         "Match my class's real assessment format, difficulty and conventions from the blueprint and materials (general track: a mixed test at my level). " +
         "Coding problems use the course language and the usual test helpers; the starter must NOT pass the tests. Every problem must be new (never one from my materials). " +
         "Questions should trace code, spot bugs and test concepts I'll actually be assessed on, with plausible wrong options. " +
@@ -149,6 +150,13 @@
       if (!ref.ok) { errors.push("problem " + (i + 1) + " (" + p.name + "): the reference solution fails its tests (" + (ref.stage || "") + "): " + String(ref.message || ref.error || "").slice(0, 1500)); continue; }
       const st = await CC.api("/api/run_tests", { language: lang, code: p.starter_code || "", tests: p.test_code || "" });
       if (st.ok) { errors.push("problem " + (i + 1) + " (" + p.name + "): the starter code already passes every test"); continue; }
+      let loose = null;
+      for (const w of (p.wrong_solutions || []).slice(0, 3)) {
+        if (!w || !w.code) continue;
+        const wr = await CC.api("/api/run_tests", { language: lang, code: w.code, tests: p.test_code || "" });
+        if (wr.ok) { loose = w; break; }
+      }
+      if (loose) { errors.push("problem " + (i + 1) + " (" + p.name + "): the tests let a wrong solution pass (" + (loose.why || "near-miss") + ") - add a test that catches it"); continue; }
       out.problems.push({ id: "p" + (i + 1), name: p.name || "Problem " + (i + 1), topic: p.topic || "", statement: p.statement || "", starter: p.starter_code || "",
         reference: p.reference_solution, tests: p.test_code, total: ref.total || 0, points: Number(p.points) > 0 ? Number(p.points) : 3 });
     }

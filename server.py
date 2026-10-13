@@ -39,7 +39,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "3.5.0"
+VERSION = "3.6.0"
 # The app's outer layer: bundled Python, Mac window, Windows launcher. Raise this only when CodeCoach's code needs a change
 # there; in-place updates that need a newer outer layer ask for a full download instead.
 SHELL_VERSION = 1
@@ -1650,7 +1650,7 @@ JAVA_IMPORTS = "import java.util.*;\nimport java.util.function.*;\nimport java.u
 JAVA_TEST_HELPERS = r'''
 public class TestRunner {
     static int passed = 0, total = 0;
-    static Solution s = new Solution();
+    /*SOLUTION_OBJECT*/
     static String show(Object o) {
         if (o == null) return "null";
         if (o instanceof int[]) return Arrays.toString((int[]) o);
@@ -1695,6 +1695,119 @@ public class TestRunner {
         if (got.equals(expected.trim())) { passed++; System.out.println("PASS  " + label); }
         else System.out.println("FAIL  " + label + "  ->  expected output \"" + expected.trim() + "\" but printed \"" + got + "\"");
     }
+    // ---- spec checks: the exact signature the problem asks for (access word, static/final, return type, parameters).
+    //   tMethod("Scoreboard", "public void addHome(int)")   tField("Scoreboard", "private int home")
+    //   tCtor("Scoreboard", "public (int, int)")             tClass("Scoreboard", "public class")
+    static String bare(String t) { return t.replaceAll("<.*>", "").replaceAll("\\s+", "").replace("java.lang.", "").replace("java.util.", ""); }
+    static String typeName(Class<?> c) { return c.isArray() ? typeName(c.getComponentType()) + "[]" : c.getSimpleName(); }
+    static String mods(int m) {
+        String a = java.lang.reflect.Modifier.isPublic(m) ? "public " : java.lang.reflect.Modifier.isPrivate(m) ? "private " : java.lang.reflect.Modifier.isProtected(m) ? "protected " : "";
+        return a + (java.lang.reflect.Modifier.isStatic(m) ? "static " : "") + (java.lang.reflect.Modifier.isFinal(m) ? "final " : "");
+    }
+    static String wantMods(String[] words, java.util.Set<String> kinds) {
+        String a = "", st = "", fi = "";
+        for (String w : words) { if (w.equals("public") || w.equals("private") || w.equals("protected")) a = w + " "; if (w.equals("static")) st = "static "; if (w.equals("final")) fi = "final "; }
+        return a + st + fi;
+    }
+    static Class<?> cls(String name) throws Exception { return Class.forName(name); }
+    static String[] params(String inside) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        int depth = 0; StringBuilder cur = new StringBuilder();
+        for (char ch : inside.toCharArray()) {
+            if (ch == '<') depth++; if (ch == '>') depth--;
+            if (ch == ',' && depth == 0) { out.add(cur.toString()); cur.setLength(0); } else cur.append(ch);
+        }
+        if (cur.toString().trim().length() > 0) out.add(cur.toString());
+        String[] r = new String[out.size()];
+        for (int i = 0; i < r.length; i++) { String p = out.get(i).trim(); String[] w = p.split("\\s+"); r[i] = bare(w.length > 1 && !p.endsWith(">") && !p.endsWith("]") && Character.isLowerCase(w[w.length - 1].charAt(0)) && w.length > 1 ? p.substring(0, p.lastIndexOf(' ')) : p); }
+        return r;
+    }
+    static void spec(String label, String problem) {
+        total++;
+        if (problem == null) { passed++; System.out.println("PASS  " + label); } else System.out.println("FAIL  " + label + "  ->  " + problem);
+    }
+    static void tMethod(String className, String sig) {
+        String problem;
+        try {
+            Class<?> c = cls(className);
+            String head = sig.substring(0, sig.indexOf('(')).trim(), inside = sig.substring(sig.indexOf('(') + 1, sig.lastIndexOf(')'));
+            String[] w = head.split("\\s+");
+            String name = w[w.length - 1], ret = bare(head.substring(0, head.lastIndexOf(name)).replaceAll("\\b(public|private|protected|static|final|abstract)\\b", ""));
+            String[] ps = params(inside);
+            java.lang.reflect.Method found = null;
+            for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
+                if (!m.getName().equals(name) || m.getParameterCount() != ps.length) continue;
+                boolean ok = true;
+                for (int i = 0; i < ps.length; i++) if (!typeName(m.getParameterTypes()[i]).equals(ps[i])) ok = false;
+                if (ok) { found = m; break; }
+            }
+            if (found == null) {
+                java.lang.reflect.Method other = null;
+                for (java.lang.reflect.Method m : c.getDeclaredMethods()) if (m.getName().equals(name)) other = m;
+                problem = other == null ? "there is no method named " + name : "found " + describe(other) + " - the parameters don't match";
+            } else {
+                String want = wantMods(w, null), got = mods(found.getModifiers());
+                String gotRet = typeName(found.getReturnType());
+                if (!want.equals(got) || !gotRet.equals(ret)) problem = "found " + describe(found);
+                else problem = null;
+            }
+        } catch (ClassNotFoundException e) { problem = "there is no class named " + className; }
+        catch (Throwable e) { problem = "couldn't check: " + e; }
+        spec("signature: " + sig, problem);
+    }
+    static String describe(java.lang.reflect.Method m) {
+        StringBuilder b = new StringBuilder(mods(m.getModifiers()) + typeName(m.getReturnType()) + " " + m.getName() + "(");
+        for (int i = 0; i < m.getParameterCount(); i++) b.append(i > 0 ? ", " : "").append(typeName(m.getParameterTypes()[i]));
+        return b.append(")").toString().replace("  ", " ").trim();
+    }
+    static void tField(String className, String sig) {
+        String problem;
+        try {
+            Class<?> c = cls(className);
+            String[] w = sig.replace(";", "").trim().split("\\s+");
+            String decl = sig.replace(";", "").trim(), name = w[w.length - 1];
+            String type = bare(decl.substring(0, decl.lastIndexOf(name)).replaceAll("\\b(public|private|protected|static|final|transient|volatile)\\b", ""));
+            java.lang.reflect.Field f = null;
+            for (java.lang.reflect.Field x : c.getDeclaredFields()) if (x.getName().equals(name)) f = x;
+            if (f == null) problem = "there is no field named " + name;
+            else {
+                String got = (mods(f.getModifiers()) + typeName(f.getType()) + " " + name).trim();
+                problem = (wantMods(w, null).equals(mods(f.getModifiers())) && typeName(f.getType()).equals(type)) ? null : "found " + got;
+            }
+        } catch (ClassNotFoundException e) { problem = "there is no class named " + className; }
+        catch (Throwable e) { problem = "couldn't check: " + e; }
+        spec("field: " + sig, problem);
+    }
+    static void tCtor(String className, String sig) {
+        String problem;
+        try {
+            Class<?> c = cls(className);
+            String head = sig.substring(0, sig.indexOf('(')).trim(), inside = sig.substring(sig.indexOf('(') + 1, sig.lastIndexOf(')'));
+            String[] ps = params(inside);
+            java.lang.reflect.Constructor<?> found = null;
+            for (java.lang.reflect.Constructor<?> k : c.getDeclaredConstructors()) {
+                if (k.getParameterCount() != ps.length) continue;
+                boolean ok = true;
+                for (int i = 0; i < ps.length; i++) if (!typeName(k.getParameterTypes()[i]).equals(ps[i])) ok = false;
+                if (ok) found = k;
+            }
+            String want = wantMods(head.length() == 0 ? new String[0] : head.split("\\s+"), null);
+            if (found == null) problem = "there is no constructor taking (" + inside.trim() + ")";
+            else problem = want.equals(mods(found.getModifiers())) ? null : "found " + (mods(found.getModifiers()).trim().length() == 0 ? "no access word" : mods(found.getModifiers()).trim()) + " on that constructor";
+        } catch (ClassNotFoundException e) { problem = "there is no class named " + className; }
+        catch (Throwable e) { problem = "couldn't check: " + e; }
+        spec("constructor: " + className + sig.trim().replaceFirst("^[a-z ]*\\(", "("), problem);
+    }
+    static void tClass(String className, String sig) {
+        String problem;
+        try {
+            Class<?> c = cls(className);
+            String want = wantMods(sig.split("\\s+"), null), got = mods(c.getModifiers());
+            problem = want.equals(got) ? null : "found " + (got.trim().length() == 0 ? "no access word" : got.trim()) + " on class " + className;
+        } catch (ClassNotFoundException e) { problem = "there is no class named " + className + " (check the spelling on your class line)"; }
+        catch (Throwable e) { problem = "couldn't check: " + e; }
+        spec("class: " + sig + " " + className, problem);
+    }
     public static void main(String[] args) {
         try { tests(); } catch (Throwable e) { System.out.println("CRASH " + e); }
         System.out.println("RESULT " + passed + "/" + total);
@@ -1703,19 +1816,74 @@ public class TestRunner {
 '''
 
 
+def java_top_classes(code):
+    """Names of classes the student declared at the top level (a full `public class X { ... }`), braces counted outside
+    strings and comments. Empty for the usual "class body only" code."""
+    src = re.sub(r"//[^\n]*|/\*.*?\*/", " ", code or "", flags=re.S)
+    src = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', '""', src)
+    names, depth = [], 0
+    for m in re.finditer(r"[{}]|\b(?:(?:public|final|abstract)\s+)*(?:class|interface|enum|record)\s+([A-Za-z_]\w*)", src):
+        t = m.group(0)
+        if t == "{":
+            depth += 1
+        elif t == "}":
+            depth -= 1
+        elif depth == 0:
+            names.append(m.group(1))
+    return names
+
+
+def java_signature_hints(err):
+    """Plain-words reasons from javac errors that mean "the student's signature differs from the spec"."""
+    out = []
+    for pat, say in ((r"non-static method (\w+)\(.*?\) cannot be referenced from a static context", "`{0}` should be `static`."),
+                     (r"non-static variable (\w+) cannot be referenced from a static context", "`{0}` should be `static`."),
+                     (r"(\w+)(?:\(.*?\))? has private access in (\w+)", "`{0}` is private in `{1}`, but the problem needs it usable from outside."),
+                     (r"symbol:\s+method (\w+)\((.*?)\)", "there's no method `{0}({1})` - check the name and parameter types."),
+                     (r"symbol:\s+variable (\w+)", "there's no field or variable `{0}` - check the name."),
+                     (r"method (\w+) in class (\w+) cannot be applied to given types", "`{0}` takes different parameters than the problem asks for."),
+                     (r"constructor (\w+) in class \w+ cannot be applied to given types", "the `{0}` constructor takes different parameters than the problem asks for."),
+                     (r"incompatible types: (.+?) cannot be converted to (.+)", "a return or parameter type is off: got `{0}` where `{1}` was expected."),
+                     (r"'void' type not allowed here", "a method returns `void` but should return a value.")):
+        for m in re.finditer(pat, err):
+            line = say.format(*[g.strip() for g in m.groups()])
+            if line not in out:
+                out.append(line)
+    return out[:5]
+
+
 def java_tests(code, tests, d):
-    header = JAVA_IMPORTS + "\npublic class Solution {\n"
+    classes = java_top_classes(code)
+    if classes and re.search(r"(?<![\w.])s\.", tests or "") and "Solution" not in classes:
+        classes = []                               # tests written for "class body" problems: helper classes stay nested
+    if classes:                                    # a full class, the way the real quiz asks for it
+        m = re.search(r"\bpublic\s+(?:(?:final|abstract)\s+)*(?:class|interface|enum|record)\s+([A-Za-z_]\w*)", re.sub(r"//[^\n]*|/\*.*?\*/", " ", code, flags=re.S))
+        fname = (m.group(1) if m else classes[0]) + ".java"
+        header = JAVA_IMPORTS
+    else:
+        fname = "Solution.java"
+        header = JAVA_IMPORTS + "\npublic class Solution {\n"
     off = header.count("\n")
-    with open(os.path.join(d, "Solution.java"), "w", encoding="utf-8", newline="\n") as f:
-        f.write(header + code + "\n}\n")
+    with open(os.path.join(d, fname), "w", encoding="utf-8", newline="\n") as f:
+        f.write(header + code + ("\n" if classes else "\n}\n"))
+    helpers = JAVA_TEST_HELPERS.replace("/*SOLUTION_OBJECT*/", "" if classes and "Solution" not in classes else "static Solution s = new Solution();")
     with open(os.path.join(d, "TestRunner.java"), "w", encoding="utf-8", newline="\n") as f:
-        f.write(JAVA_IMPORTS + JAVA_TEST_HELPERS + tests + "\n    }\n}\n")
-    r = run_proc(["javac", "-nowarn", "-encoding", "UTF-8", "-d", ".", "Solution.java"], d, 40)
+        f.write(JAVA_IMPORTS + helpers + tests + "\n    }\n}\n")
+    r = run_proc(["javac", "-nowarn", "-encoding", "UTF-8", "-d", ".", fname], d, 40)
     if r["rc"] != 0:
-        return {"ok": False, "stage": "compile", "message": fix_lines(r["err"], "Solution.java", off), "passed": 0, "total": 0}
+        return {"ok": False, "stage": "compile", "message": fix_lines(r["err"], fname, off), "passed": 0, "total": 0}
     r = run_proc(["javac", "-nowarn", "-encoding", "UTF-8", "-cp", ".", "-d", ".", "TestRunner.java"], d, 40)
     if r["rc"] != 0:
-        return {"ok": False, "stage": "test_compile", "message": "The TEST code did not compile (not your fault):\n" + r["err"].strip(), "passed": 0, "total": 0}
+        msg = r["err"].strip()
+        if classes and re.search(r"cannot find symbol[\s\S]*?symbol:\s+class\s+\w+", msg):
+            msg = "The tests use a class your code doesn't declare - check the class name on your `public class` line.\n\n" + msg
+            return {"ok": False, "stage": "compile", "message": msg, "passed": 0, "total": 0}
+        why = java_signature_hints(msg)
+        if why:                                    # your code compiles, but not with the signature the problem asks for
+            return {"ok": False, "stage": "compile", "passed": 0, "total": 0, "message":
+                    "Your code compiles, but the tests can't call it the way the problem specifies:\n" + "\n".join("- " + w for w in why) +
+                    "\nCheck names, parameter types, return types, static and public against the statement.\n\n" + msg[:2000]}
+        return {"ok": False, "stage": "test_compile", "message": "The TEST code did not compile (not your fault):\n" + msg, "passed": 0, "total": 0}
     return summarize_tests(run_proc(["java", "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-ea", "-Xss64m", JVM_HEAP, "-cp", ".", "TestRunner"], d, 8, sandbox=True))
 
 
@@ -2349,10 +2517,32 @@ def build_system_prompt(cfg, folder, mode, topic, stats=None):
         if na["stale"]:
             warm.append("- The course profile's Next assessment looks out of date (%s). At the start, ask once what's next and when, then `update_next_assessment`." %
                         ("empty" if not na["text"] else "\"" + na["text"][:120] + "\"" + (", date passed" if na["date"] else ", no date")))
+        cov = coverage_status(folder)
+        if cov["assessment"] and not na["stale"]:
+            if not cov["exists"]:
+                warm.append("- No coverage map for %s yet. Early this session build it: read the unit's lessons, the practice quiz, past quizzes and the blueprint, "
+                            "then `update_coverage` with every skill, where it comes from and the ways it can be asked (status gap, or practicing/solid if the tracker shows it)." % cov["assessment"])
+            elif cov["gaps"] or cov["practicing"]:
+                warm.append("- %s coverage: %d/%d skills solid. Gaps: %s. Plan today's problems around the gaps." %
+                            (cov["assessment"], cov["solid"], cov["total"], ", ".join(cov["gaps"][:8]) or "none"))
+            mm = materials_missing(folder)
+            if mm:
+                warm.append("- Materials has no %s for %s. Ask the student once to add them on the Materials page (a unit named \"%s\"); "
+                            "the coverage map and the question styles depend on them. Until then work from what's there, the blueprint and past quizzes, and say so." %
+                            (" or ".join(mm["missing"]), mm["assessment"], mm["assessment"]))
         if warm and mode not in ("exam", "quizsim"):
             ctx.append("\n## START OF SESSION (computed by the app today)\n" + "\n".join(warm))
     except Exception as e:
         print("warm-up block skipped: %s" % e)
+    try:
+        cov = coverage_status(folder)
+        if cov["exists"]:
+            ctx.append("\n## COVERAGE MAP: %s (note `%s`; %d/%d solid, %d practicing, %d gaps; keep it current with update_coverage)\n" %
+                       (cov["assessment"], cov["note"], cov["solid"], cov["total"], cov["practicing"], len(cov["gaps"])) +
+                       "\n".join("- %s [%s]%s%s" % (r["skill"], r["status"], " - asked as: " + r["ways"] if r["ways"] else "",
+                                                    " (" + r["source"] + ")" if r["source"] else "") for r in cov["rows"][:40]))
+    except Exception as e:
+        print("coverage block skipped: %s" % e)
     try:
         due = retention_due(outcome_events(folder))
     except Exception:
@@ -2786,7 +2976,8 @@ def dashboard(cfg, folder):
             "prices_updated": load_prices().get("updated", ""),
             "open_problems": [dict(p, session=s["id"], title=s.get("title"), updated=s.get("updated"))
                               for s in list_sessions(cfg, folder, full=True) for p in (s.get("open") or [])][:6],
-            "assessment": next_assessment(folder)}
+            "assessment": next_assessment(folder), "coverage": coverage_status(folder),
+            "materials_missing": materials_missing(folder)}
 
 
 SESSION_META = {}            # path -> ((mtime, size), summary): only new or changed session files are re-read
@@ -2922,6 +3113,112 @@ def set_next_assessment(folder, text):
     return next_assessment(folder)
 
 
+# ---------------------------------------------------------------- coverage map (what the next assessment can ask)
+
+ASSESS_KINDS = r"quiz|exam|midterm|final|test|homework|hw|mp|project|lab"
+
+
+def assessment_label(text):
+    """'Quiz 6 on 2026-10-16 - objects' -> 'Quiz 6'; 'Midterm 2' -> 'Midterm 2'; nothing recognizable -> ''."""
+    m = re.search(r"(?<![a-z])(" + ASSESS_KINDS + r")(?![a-z])[ \t]*#?[ \t]*(\d{1,2})?(?!\d)", text or "", re.I)
+    if not m:
+        return ""
+    kind = m.group(1).lower()
+    kind = {"hw": "HW", "mp": "MP"}.get(kind, kind.capitalize())
+    return kind + (" " + str(int(m.group(2))) if m.group(2) else "")
+
+
+def coverage_path(folder, assessment):
+    label = assessment_label(assessment) or re.sub(r"\s+", " ", re.sub(r"[^\w .-]", "", assessment or "")).strip()[:40] or "Next assessment"
+    return os.path.join(folder, "Coverage - %s.md" % label), label
+
+
+COVERAGE_HEAD = ("# Coverage - {a}\n\nEverything {a} can ask: the skills from the whole unit (lessons, practice quiz, past quizzes, blueprint), "
+                 "the ways each one can be asked, and how solid it is. Your coach keeps it current; edit it too.\n"
+                 "Status: gap (not practiced yet) -> practicing -> solid (done the quiz-style version without help).\n\n"
+                 "| Skill | Source | Ways asked | Status | Last practiced |\n| --- | --- | --- | --- | --- |\n")
+
+
+def coverage_state(status):
+    s = (status or "").lower()
+    return "solid" if "solid" in s else ("practicing" if re.search(r"practic|shaky|partial|progress", s) else "gap")
+
+
+def coverage_status(folder):
+    """The coverage map for the next assessment: counts, gaps and rows. exists=False when the next assessment has none yet."""
+    na = next_assessment(folder)
+    files = sorted((n for n in os.listdir(folder) if n.startswith("Coverage - ") and n.endswith(".md")),
+                   key=lambda n: -os.path.getmtime(os.path.join(folder, n)))
+    label = assessment_label(na["text"])
+    if label:
+        name = next((n for n in files if norm_key(n[11:-3]) == norm_key(label)), None)
+    else:
+        name = files[0] if files else None
+    out = {"assessment": label or (name[11:-3] if name else ""), "next": na["text"], "exists": bool(name), "note": name or "",
+           "total": 0, "solid": 0, "practicing": 0, "gaps": [], "rows": []}
+    if not name:
+        return out
+    for r in table_rows(read_text(os.path.join(folder, name))):
+        if not r.get("skill"):
+            continue
+        st = coverage_state(r.get("status"))
+        out["rows"].append({"skill": r.get("skill"), "source": r.get("source", ""), "ways": r.get("ways asked", ""),
+                            "status": st, "last": r.get("last practiced", "")})
+        if st == "gap":
+            out["gaps"].append(r.get("skill"))
+        else:
+            out[st] += 1
+    out["total"] = len(out["rows"])
+    return out
+
+
+def update_coverage(folder, assessment, rows):
+    path, label = coverage_path(folder, assessment or next_assessment(folder)["text"])
+    if not os.path.exists(path):
+        write_text(path, COVERAGE_HEAD.format(a=label))
+    done = []
+    for r in rows or []:
+        skill = re.sub(r"\s+", " ", str(r.get("skill") or "")).strip()
+        if not skill:
+            continue
+        vals = {"source": r.get("source"), "ways asked": r.get("ways"), "status": r.get("status")}
+        if r.get("status") and coverage_state(r.get("status")) != "gap":
+            vals["last practiced"] = today()
+        done.append("%s %s" % (skill, upsert_row(path, skill, vals)))
+    return {"note": os.path.basename(path), "assessment": label, "result": "; ".join(done) or "no rows"}
+
+
+def materials_missing(folder):
+    """For a class course with a current next assessment: what Materials lacks for it.
+    None = nothing to say; else {"assessment": "Quiz 6", "missing": ["lessons", "practice quiz"]}."""
+    na = next_assessment(folder)
+    if na["stale"] or course_meta(folder)["type"] != "class":
+        return None
+    items = assessment_materials(folder, na["text"])
+    if items is None:
+        return None
+    missing = []
+    if not any(it["type"] in ("lesson", "slides", "notes") or re.search(r"lesson|lecture|slides", it["title"], re.I) for it in items):
+        missing.append("lessons")
+    if not any(it["type"] == "practice-quiz" or re.search(r"practice|\bpq ?\d", it["title"], re.I) for it in items):
+        missing.append("practice quiz")
+    return {"assessment": assessment_label(na["text"]), "missing": missing} if missing else None
+
+
+def assessment_materials(folder, assessment):
+    """Materials that look like they belong to the assessment: for 'Quiz 6', anything whose title, file name or unit says
+    quiz 6, q6, pq6 or a range like 'Quiz 5-7'. None when the assessment has no number to match on."""
+    m = re.match(r"(\w+?)(?: (\d+))?$", assessment_label(assessment) or "")
+    if not m or not m.group(2):
+        return None
+    kind, n = m.group(1).lower(), int(m.group(2))
+    short = {"quiz": "p?q", "exam": "e", "midterm": "m", "homework": "hw", "hw": "hw", "mp": "mp", "lab": "lab"}.get(kind, re.escape(kind))
+    pat = re.compile(r"(?<![a-z0-9])(?:%s|practice[ _-]?%s|%s)[ _#-]*0*(\d{1,2})(?:[ ]*(?:-|to|through)[ ]*(?:%s)?[ ]*0*(\d{1,2}))?(?!\d)"
+                     % (re.escape(kind), re.escape(kind), short, re.escape(kind)), re.I)
+    def hit(text):
+        return any(int(a) == n or (b and int(a) <= n <= int(b)) for a, b in pat.findall(text))
+    return [it for u in list_materials(folder) for it in u["items"] if hit(" ".join((it["title"], it["path"], it.get("unit", ""))))]
+
 def list_sessions(cfg, folder, full=False):
     d = os.path.join(sync_dir(cfg), "sessions")
     names = [n for n in os.listdir(d) if n.endswith(".md")]
@@ -3055,6 +3352,9 @@ class Handler(BaseHTTPRequestHandler):
                 tk = resolve_toolkit(folder, cfg)
                 if tk and "toolkit" not in out:
                     out["toolkit"] = {"name": os.path.basename(tk), "text": read_text(tk), "path": tk}
+                cov = coverage_status(folder)
+                if cov["exists"]:
+                    out["coverage"] = {"name": cov["note"], "text": read_text(os.path.join(folder, cov["note"]))}
                 lp = learner_path(cfg)
                 out["learner"] = {"name": "Learner Profile.md", "text": read_text(lp), "path": lp, "learner": True}
                 return self.send_json({"files": out, "meta": course_meta(folder), "rel": relposix(folder, cfg["vault"])})
@@ -3425,6 +3725,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"note": os.path.basename(path), "text": read_text(path, 30000)})
             if p == "/api/course/assessment":
                 return self.send_json(set_next_assessment(folder, b.get("text") or ""))
+            if p == "/api/note/coverage":
+                return self.send_json(update_coverage(folder, b.get("assessment") or "", b.get("rows") or []))
+            if p == "/api/coverage":
+                return self.send_json(coverage_status(folder))
             if p == "/api/note/review":
                 path = os.path.join(folder, files.get("review") or "Review Notes.md")
                 if not os.path.exists(path):

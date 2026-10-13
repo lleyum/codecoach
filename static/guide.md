@@ -88,6 +88,8 @@ Your home screen - it answers "what should I do now?".
 
 - **Stats:** streak, reviews due, topics mastered, Toolkit lines solid, problems solved this week.
 - **Next assessment:** if your course profile has no date for your next quiz or exam, or the date has passed, Today asks. **Update** takes a few seconds; **Still right** hides it for a week. Your coach plans around it.
+- **Missing materials:** when your next quiz has no lessons or practice quiz in Materials, Today asks you to add them (in a unit named after the quiz, e.g. "Quiz 6"). Your coach needs them to match the quiz's question styles.
+- **Coverage map** (e.g. "Quiz 6: 7/12 skills solid"): every skill your next quiz or exam can ask, from the whole unit, and which ones are solid. **Study the gaps** starts a session on the ones that aren't; **Open the map** shows the full list. No map yet? **Build the map** has your coach make one from your lessons, the practice quiz and past quizzes.
 - **Up next:** the next unchecked item on your roadmap, with **Learn it**. If your roadmap is empty, **Plan my roadmap** has your coach build one.
 - **Spaced review:** everything due, each with **Review**; **Review all** does them in one mixed session.
 - **Unfinished problems:** coding problems you left open in earlier sessions, each with **Finish it**.
@@ -141,7 +143,9 @@ Three layers: the **problem** on top, **your code** in the middle, the **test ou
 - **Reset** (circular arrow): back to the starting code.
 - **Problem tabs:** all problems from the session stay open; only the one on screen counts time.
 
-Every problem is checked before you see it: the coach's own solution must pass its tests, and the starting code must fail them. You'll never get a broken problem.
+Every problem is checked before you see it: the coach's own solution must pass its tests, the starting code must fail them, and for harder problems (R4-R6) a few near-miss wrong answers (a missing `public`, the wrong return type, an off-by-one) must fail too. So the tests are strict before you start, instead of being fixed halfway through.
+
+**Java: whole classes.** When your class has you write `public class Scoreboard { ... }`, so do the problems: you write the whole class, and the tests create objects with `new`. Tests also check the exact signature the problem asks for and say what's off, e.g. `FAIL signature: public int getHome() -> found int getHome()`. If your code compiles but the tests can't call it (a missing `static`, different parameter types), the output says that in plain words.
 
 ### Practice exams
 
@@ -160,6 +164,7 @@ No AI runs during the exam: building it costs about as much as a few coach messa
 A read-only study sheet to look over before a quiz, an exam or a session. Open it from **Today → Quick review**, the **Quick review** card on the Study page, or the book icon next to any past session.
 
 - **By topic:** the key ideas your coach wrote for it, the syntax lines you drilled (with how solid each is), the patterns that use it, your mistakes to watch out for, and your own solutions. Topics due for review are marked ●. **Practice this** starts a session on it.
+- **Your next quiz:** when there's a coverage map, the first entry ("Quiz 6: everything it covers") lists every skill grouped into not practiced yet, practicing and solid, with the ways each is asked.
 - **By session:** what you practiced, in order: drills with the standard answer, quiz questions with the right answer and explanation, Parsons problems in the right order, and every coding problem with your code. Exams include the model solutions.
 - **During a session:** press **Review** in the session bar. The sheet opens beside the chat and updates as you go.
 - **Copy as Markdown** puts the sheet on your clipboard for Notes, Obsidian or a doc.
@@ -219,6 +224,7 @@ Every note CodeCoach keeps is a Markdown file in your Library. Read and edit the
 - **Mistakes** - your repeated mistakes and how often they show up.
 - **Patterns** (Pattern Library) - reusable solution patterns (counting, searching, pairwise...) with trigger words, skeletons and pitfalls.
 - **Blueprint** - what your class's tests look like (format, rules, traps).
+- **Coverage** (`Coverage - Quiz 6.md`) - everything your next assessment can ask: each skill, where it comes from, the ways it can be asked, and gap / practicing / solid. Your coach keeps it current; you can edit it.
 - **Course profile** - how the course works: goal, assessments, next quiz date, AI policy, code format, target minutes. Keep "Next assessment" current so your coach plans around it.
 - **Learner profile** - how *you* learn best (see above). Shared by every course.
 
@@ -330,8 +336,9 @@ Optional sounds, all generated inside the app (no audio files), tuned to stay su
 2. **Learn** session on the new topic with those materials ticked.
 3. **Drill** for 15-20 minutes most days - it closes the "I get it but can't write it" gap.
 4. Do whatever **Today** says is due (reviews take a few minutes each).
-5. Two days before a quiz: add the practice quiz, then a **Quiz sim**. Fix what it finds.
-6. After the quiz: add your feedback to Materials - your coach turns misses into targeted practice.
+5. As soon as the practice quiz is out: add it and the unit's lessons, and let your coach build the **coverage map**. Work the gaps; practice looks like the quiz (same question styles) and also asks each skill another way, so you aren't just memorizing the practice quiz.
+6. Two days before a quiz: a **Quiz sim**. Fix what it finds.
+7. After the quiz: add your feedback to Materials - your coach turns misses into targeted practice.
 
 **When time is short:** Today → Review all (10-15 min). Short, frequent sessions beat one long cram.
 

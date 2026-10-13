@@ -22,6 +22,7 @@ PROBLEM = {
     "starter_code": "def count_positive(nums):\n    return 0\n",
     "reference_solution": "def count_positive(nums):\n    return sum(1 for n in nums if n > 0)\n",
     "test_code": 't("[1, -2, 3]", 2, lambda: count_positive([1, -2, 3]))\nt("[]", 0, lambda: count_positive([]))\nt("[5, 5]", 2, lambda: count_positive([5, 5]))',
+    "wrong_solutions": [{"code": "def count_positive(nums):\n    return len(nums)\n", "why": "counts every number"}],
 }
 def server_read(path):
     with open(path, encoding="utf-8") as f:
@@ -150,6 +151,48 @@ class SessionTest(unittest.TestCase):
                 # unfinished problem
                 page.click("#view-today >> text=Finish it")
                 page.wait_for_selector("#pStatement >> text=greater than 0", timeout=10000)
+                self.assertEqual(errors, [])
+            except Exception:
+                page.screenshot(path=os.path.join(os.environ.get("E2E_SHOTS", app.home), "e2e-failure.png"))
+                raise
+            finally:
+                browser.close()
+
+    def test_loose_tests_rejected_and_coverage_on_today(self):
+        import datetime as dt
+        with App() as app, sync_playwright() as p:
+            f = app.api("/api/course/create", {"language": "python", "type": "class", "name": "CS 101"})["folder"]
+            app.api("/api/course/assessment", {"folder": f, "text": "Quiz 6 on %s - lists" % (dt.date.today() + dt.timedelta(days=5)).isoformat()})
+            app.api("/api/note/coverage", {"folder": f, "rows": [{"skill": "count with a condition", "ways": "write it; trace it", "status": "gap"},
+                                                                 {"skill": "loop over a list", "status": "solid"}]})
+            loose = dict(PROBLEM, wrong_solutions=[{"code": "def count_positive(nums):\n    return sum(1 for n in nums if n >= 0)\n", "why": "counts zero too"}])
+            strict = dict(loose, test_code=PROBLEM["test_code"] + '\nt("[0, 1]", 1, lambda: count_positive([0, 1]))')
+            app.llm.reply("First problem.", tools=[("give_problem", loose)])
+            app.llm.reply("Fixed the tests.", tools=[("give_problem", strict)], when="let this wrong solution pass")
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            try:
+                page.goto(app.base + "/")
+                page.wait_for_selector("#view-today .cov-card", timeout=15000)
+                self.assertIn("quiz 6: 1/2 skills solid", page.inner_text("#view-today .cov-card").lower())
+                self.assertIn("count with a condition", page.inner_text("#view-today .cov-card"))
+                banner = page.inner_text("#view-today .banner.mats")
+                self.assertIn("Add the lessons and practice quiz for Quiz 6", banner)
+                page.click("#view-today .banner.mats >> text=Not now")
+                self.assertEqual(page.locator("#view-today .banner.mats").count(), 0)
+                page.click("#view-today .cov-card >> text=Open the map")
+                page.wait_for_selector("#view-progress .tabs button.on >> text=Coverage", timeout=10000)
+                self.assertIn("count with a condition", page.inner_text("#view-progress .note-card"))
+                # the coach's first tests let "n >= 0" pass: rejected before the student sees it, then fixed
+                page.click("#nav button[data-view=study]")
+                page.click("#view-study >> text=Start session")
+                page.wait_for_selector("#pStatement >> text=greater than 0", timeout=20000)
+                tool_msgs = [m for r in app.llm.requests for m in r["messages"] if m.get("role") == "tool"]
+                self.assertTrue(any("let this wrong solution pass" in (m.get("content") or "") for m in tool_msgs))
+                self.assertIn("[0, 1]", page.evaluate("CC.S.session.problems[0].tests"))
+                self.assertIn("COVERAGE MAP: Quiz 6", app.llm.requests[0]["messages"][0]["content"])
                 self.assertEqual(errors, [])
             except Exception:
                 page.screenshot(path=os.path.join(os.environ.get("E2E_SHOTS", app.home), "e2e-failure.png"))

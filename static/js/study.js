@@ -636,10 +636,12 @@
     { type: "function", function: { name: "drill", description: "R0 toolkit drill: the student types ONE expression/statement from memory. Harness contains {{ANSWER}} once and prints output that depends on it; your reference answer is verified first.",
       parameters: { type: "object", properties: { prompt: { type: "string" }, harness: { type: "string" }, expected_output: { type: "string" }, reference_answer: { type: "string" },
         toolkit_task: { type: "string" } }, required: ["prompt", "harness", "expected_output", "reference_answer"] } } },
-    { type: "function", function: { name: "give_problem", description: "Give an R2-R6 coding problem in the student's editor. Reference is tested first; rejected if it fails or if the starter already passes. After success, STOP and wait for the result message.",
+    { type: "function", function: { name: "give_problem", description: "Give an R2-R6 coding problem in the student's editor. Reference is tested first; rejected if it fails, if the starter already passes, or if a wrong_solution passes. Java: method-only code is tested on the object s; whole-class code (public class X {...}) is tested by building objects in the tests, and signatures are checked with tClass/tField/tCtor/tMethod. After success, STOP and wait for the result message.",
       parameters: { type: "object", properties: { name: { type: "string" }, topic: { type: "string", description: "Tracker topic" }, rung: { type: "integer", minimum: 2, maximum: 6 },
         pattern: { type: "string" }, statement: { type: "string", description: "Markdown statement with examples, in the course's style" }, starter_code: { type: "string" },
         reference_solution: { type: "string" }, test_code: { type: "string" }, max_changed_lines: { type: "integer", description: "R4 debug only" }, time_limit_min: { type: "integer" },
+        wrong_solutions: { type: "array", description: "1-3 near-miss WRONG solutions a student might write (a missing public, a wrong return type, an off-by-one, a missed edge case). Every one must fail at least one test, or the problem is rejected - this proves your tests are strict enough. Required for R4-R6.",
+          items: { type: "object", properties: { code: { type: "string" }, why: { type: "string", description: "What's wrong with it, in a few words" } }, required: ["code", "why"] } },
         purpose: { type: "string", enum: ["practice", "pre", "post", "retention", "transfer"], description: "Outcome tracking: pre = check before teaching a new topic, post = parallel check after mastery, retention = 30/60/90-day check, transfer = new context. Default practice." },
         window: { type: "integer", description: "retention only: 30, 60 or 90" } },
         required: ["name", "topic", "rung", "statement", "starter_code", "reference_solution", "test_code"] } } },
@@ -668,6 +670,12 @@
       parameters: { type: "object", properties: { markdown: { type: "string" } }, required: ["markdown"] } } },
     { type: "function", function: { name: "update_next_assessment", description: "Set the course profile's Next assessment line, e.g. 'Quiz 6 on 2026-10-16 - Objects: constructors, getters/setters, static'. Include a date (YYYY-MM-DD) and the topics.",
       parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
+    { type: "function", function: { name: "update_coverage", description: "Add or update rows of the coverage map for the next assessment: every skill it can ask, from the WHOLE unit (lessons, practice quiz, past quizzes, blueprint). One row per skill. Build it fully once, then update a row's status as the student practices it: gap -> practicing -> solid (did the quiz-style version without help).",
+      parameters: { type: "object", properties: { assessment: { type: "string", description: "e.g. 'Quiz 6'. Leave empty for the course's next assessment." },
+        rows: { type: "array", items: { type: "object", properties: { skill: { type: "string", description: "Short and concrete, e.g. 'write a constructor that sets fields'" },
+          source: { type: "string", description: "Where it comes from, e.g. 'Lesson: Constructors', 'PQ6 #2', 'blueprint'" },
+          ways: { type: "string", description: "The ways it can be asked, ';'-separated, e.g. 'write the whole class; fix a broken one; trace output'" },
+          status: { type: "string", enum: ["gap", "practicing", "solid"] } }, required: ["skill"] } } }, required: ["rows"] } } },
     { type: "function", function: { name: "update_review_notes", description: "Keep the student's review sheet for a topic current: the key ideas they'd reread before a quiz. Start with a **Terms** list (each key word with a one-line plain definition and where it appears in code), then 3-8 short bullets in plain words plus 1-2 small code examples in the course language. Replaces that topic's section, so include what's still true. Call after teaching a concept and when a problem shows something worth remembering.",
       parameters: { type: "object", properties: { topic: { type: "string", description: "Tracker topic name" }, markdown: { type: "string" } }, required: ["topic", "markdown"] } } },
     { type: "function", function: { name: "update_roadmap", description: "Replace the whole Roadmap note (title, units, - [ ] / - [x] topic checklists). Keep existing checkmarks.",
@@ -747,6 +755,9 @@
       if (!ref.ok) return { error: "Problem rejected: your reference solution does not pass your tests (stage: " + ref.stage + ").\n" + (ref.message || "").slice(0, 3000) + "\nFix the reference or tests and call give_problem again." };
       const st = await CC.api("/api/run_tests", { language: L(), code: a.starter_code || "", tests: a.test_code || "" });
       if (st.ok) return { error: "Problem rejected: the starter code already passes every test. The starter must be incomplete (or, for R4, contain a bug a test catches)." };
+      const loose = await looseTests(a.wrong_solutions, a.test_code);
+      if (loose) return loose;
+      if ((a.rung || 0) >= 4 && !(a.wrong_solutions || []).length) return { error: "Problem rejected: R4-R6 problems need 1-3 wrong_solutions (near-misses a student might write, e.g. a missing public or a wrong return type) so the app can check your tests catch them. Add them and call give_problem again." };
       const pr = { id: "p" + Date.now().toString(36), name: a.name, topic: a.topic, rung: a.rung, pattern: a.pattern || "", statement: a.statement,
         starter: a.starter_code, tests: a.test_code, maxChanged: a.max_changed_lines || null, timeLimit: a.time_limit_min || null,
         purpose: a.purpose || "practice", window: a.window || null,
@@ -836,8 +847,26 @@
       addItem({ kind: "sys", icon: "flag", text: "Next assessment · " + a.text });
       return { saved: true, date: r.date || "(no date found - include YYYY-MM-DD)" };
     },
+    async update_coverage(a) {
+      const r = await CC.api("/api/note/coverage", { folder: S.session.course.folder, assessment: a.assessment || "", rows: a.rows || [] });
+      if (r.error) return { error: r.error };
+      const solid = (a.rows || []).filter((x) => x.status === "solid").length;
+      addItem({ kind: "sys", icon: "target", text: "Coverage · " + r.assessment + " · " + (a.rows || []).length + " skill" + ((a.rows || []).length === 1 ? "" : "s") + (solid ? " (" + solid + " solid)" : "") });
+      return r;
+    },
     async update_review_notes(a) { const r = await noteOp("/api/note/review", a, "Review sheet · " + a.topic, "book"); CC.review && CC.review.invalidate(); return r; },
   };
+
+  // tests that let a wrong answer pass teach the wrong thing: every near-miss the coach supplies must fail at least one test
+  async function looseTests(wrongs, tests) {
+    for (const w of (wrongs || []).slice(0, 3)) {
+      if (!w || !w.code) continue;
+      const r = await CC.api("/api/run_tests", { language: L(), code: w.code, tests: tests || "" });
+      if (r.ok) return { error: "Problem rejected: your tests let this wrong solution pass (" + (w.why || "near-miss") + "). Add a test that catches it - for a signature or access word use tMethod/tField/tCtor/tClass - and call give_problem again.\nWrong solution that passed:\n" + String(w.code).slice(0, 1500) };
+    }
+    return null;
+  }
+  CC.looseTests = looseTests;
 
   // ================================================================== streaming LLM
   async function streamLLM(body, onText, signal) {

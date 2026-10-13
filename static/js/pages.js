@@ -70,6 +70,17 @@
           btn("Update", "edit", () => editAssessment(c, as, () => CC.views.today.show()), "sm primary"));
         inner.appendChild(card);
       }
+      // the next assessment has no lessons / practice quiz in Materials: the coach can't match its format without them
+      const mm = d.materials_missing, mmKey = "matsOk_" + c.folder;
+      if (mm && CC.local.get(mmKey, "") !== mm.assessment + "|" + mm.missing.join()) {
+        const card = h("div", { class: "banner mats" }, h("span", { html: icon("upload") }),
+          h("span", null, h("b", { text: "Add the " + mm.missing.join(" and ") + " for " + mm.assessment + ". " }),
+            h("span", { text: "Your coach builds practice in the course's own question styles from them, and checks it covers the whole unit. Put them in a unit named \"" + mm.assessment + "\"." })),
+          h("span", { class: "spacer" }),
+          btn("Not now", null, () => { CC.local.set(mmKey, mm.assessment + "|" + mm.missing.join()); card.remove(); }, "sm ghost"),
+          btn("Add materials", "upload", () => CC.go("materials"), "sm primary"));
+        inner.appendChild(card);
+      }
       const left = h("div", { class: "stack" }), right = h("div", { class: "stack" });
       inner.appendChild(h("div", { class: "today-grid" }, left, right));
 
@@ -87,6 +98,29 @@
           c.type === "class" ? btn("Add materials", "upload", () => CC.go("materials"), "sm") : null));
       }
       left.appendChild(upnext);
+
+      // coverage map: is everything the next assessment can ask solid?
+      const cv = d.coverage || {};
+      if (cv.exists && cv.total) {
+        const cc = h("div", { class: "card cov-card" }, h("h3", { html: icon("target") + MD.esc(cv.assessment) + ": " + cv.solid + "/" + cv.total + " skills solid" }),
+          h("div", { class: "bar" + (cv.solid === cv.total ? " done" : "") }, h("span", { style: { width: Math.round(cv.solid / cv.total * 100) + "%" } })));
+        const rest = cv.rows.filter((r) => r.status !== "solid");
+        if (rest.length) {
+          const list = h("div", { class: "cov-list" });
+          rest.slice(0, 8).forEach((r) => list.appendChild(h("span", { class: "chip " + (r.status === "gap" ? "warn" : ""), title: r.ways ? "Asked as: " + r.ways : "", text: r.skill })));
+          if (rest.length > 8) list.appendChild(h("span", { class: "tiny muted", text: "+" + (rest.length - 8) + " more" }));
+          cc.appendChild(list);
+        } else cc.appendChild(h("p", { class: "muted small", text: "Everything on the map is solid. A timed quiz simulation is the best use of your time now." }));
+        cc.appendChild(h("div", { class: "quick" },
+          rest.length ? btn("Study the gaps", "play", () => CC.go("study", { fresh: true, mode: "learn", topic: cv.assessment + ": " + rest.slice(0, 3).map((r) => r.skill).join(", ") }), "sm primary")
+            : btn("Quiz simulation", "timer", () => CC.go("study", { fresh: true, mode: "quizsim", topic: cv.assessment }), "sm primary"),
+          btn("Open the map", "file", () => CC.go("progress", { tab: "coverage" }), "sm ghost")));
+        left.appendChild(cc);
+      } else if (cv.assessment && d.assessment && !d.assessment.stale) {
+        left.appendChild(h("div", { class: "card cov-card" }, h("h3", { html: icon("target") + "What can " + MD.esc(cv.assessment) + " ask?" }),
+          h("p", { class: "muted small", text: "Your coach can map every skill in the unit and the ways each is asked, from your lessons, the practice quiz and past quizzes, then track which ones are solid." }),
+          h("div", { class: "quick" }, btn("Build the map", "spark", () => CC.go("study", { fresh: true, mode: "learn", topic: "Coverage map for " + cv.assessment }), "sm primary"))));
+      }
 
       // Due reviews
       const dueCard = h("div", { class: "card" }, h("h3", { html: icon("refresh") + "Spaced review" }));
@@ -750,10 +784,11 @@
   };
 
   // ================================================================== PROGRESS
-  const TABS = [["overview", "Overview"], ["roadmap", "Roadmap"], ["tracker", "Mastery"], ["toolkit", "Toolkit"], ["mistakes", "Mistakes"], ["patterns", "Patterns"], ["blueprint", "Blueprint"], ["review", "Review notes"], ["profile", "Course profile"], ["learner", "Learner profile"]];
+  const TABS = [["overview", "Overview"], ["roadmap", "Roadmap"], ["tracker", "Mastery"], ["toolkit", "Toolkit"], ["mistakes", "Mistakes"], ["patterns", "Patterns"], ["blueprint", "Blueprint"], ["review", "Review notes"], ["coverage", "Coverage"], ["profile", "Course profile"], ["learner", "Learner profile"]];
   const PR = { tab: CC.local.get("pr_tab", "overview"), data: null, editing: false };
   CC.views.progress = {
-    async show() {
+    async show(opts) {
+      if (opts && opts.tab) { PR.tab = opts.tab; PR.editing = false; CC.local.set("pr_tab", opts.tab); }
       const inner = page("view-progress");
       if (!S.course) return noCourse(inner);
       const r = await CC.api("/api/course?" + CC.q({ folder: S.course.folder }));
