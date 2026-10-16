@@ -17,6 +17,7 @@ This file tells CodeCoach how this course works. Edit it anytime; it is read at 
 ## Rules
 - **AI policy:** {{RULES}}
 - **Code format:** {{FORMAT}}
+- **Style checks:** (none) - only if your class's grader enforces them: no-hidden-field (a parameter can't share a field's name), no-param-assign (never reassign a parameter)
 
 ## Files (all in this folder)
 - [[Roadmap]] - the plan: units and topics in order

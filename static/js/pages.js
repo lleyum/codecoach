@@ -247,15 +247,22 @@
       inner.appendChild(h("div", { class: "page-head" }, h("div", null, h("h1", { text: "Materials" }),
         h("div", { class: "sub", text: "Your class content, organized by unit. The coach uses it to teach exactly what your class tests." })),
         h("span", { class: "spacer" }), btn("New unit", "plus", newUnit), btn("Add material", "upload", () => addModal([]), ""), studyBtn));
-      const drop = h("div", { class: "drop" }, h("span", { html: icon("upload") }),
-        h("div", null, h("b", { text: "Drop files here" }), " - PDF, Word, PowerPoint, notebooks, code, text. Or ",
-          h("a", { href: "#", text: "browse", onclick: (e) => { e.preventDefault(); pick.click(); } }), "."));
+      const drop = h("div", { class: "drop", tabindex: "0", title: "Drop files or text, or click here and paste (" + (/Mac/.test(navigator.platform) ? "⌘" : "Ctrl+") + "V)" }, h("span", { html: icon("upload") }),
+        h("div", null, h("b", { text: "Drop files or text here, or paste" }), " (" + (/Mac/.test(navigator.platform) ? "⌘V" : "Ctrl+V") + ") - PDF, Word, PowerPoint, notebooks, code, or text copied from a page. Or ",
+          h("a", { href: "#", text: "browse", onclick: (e) => { e.preventDefault(); pick.click(); } }), " · ",
+          h("a", { href: "#", text: "type or paste text", onclick: (e) => { e.preventDefault(); addModal([]); } }), "."));
       const pick = h("input", { type: "file", multiple: true, class: "hidden", onchange: () => { addModal([...pick.files]); pick.value = ""; } });
       inner.appendChild(drop); inner.appendChild(pick);
       const v = $("view-materials");
       v.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
       v.ondragleave = (e) => { if (!v.contains(e.relatedTarget)) drop.classList.remove("over"); };
-      v.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files.length) addModal([...e.dataTransfer.files]); };
+      v.ondrop = (e) => {
+        if (e.dataTransfer.getData("text/cc-material")) return;          // moving a material between units
+        e.preventDefault(); drop.classList.remove("over");
+        if (e.dataTransfer.files.length) return addModal([...e.dataTransfer.files]);
+        const text = e.dataTransfer.getData("text/plain");                // text dragged from a page, PDF or doc
+        if (text && text.trim()) addText(text);
+      };
       M.box = h("div", { class: "mat" });
       inner.appendChild(M.box);
       await loadMaterials();
@@ -473,6 +480,27 @@
   }
   CC.addMaterialFiles = addModal;
 
+  // pasted or dropped text becomes a material: the form opens with the text filled in and a title and type guessed
+  function addText(text) {
+    if (!S.course) return;
+    text = String(text).replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").trim();
+    const first = (text.split("\n").find((l) => l.trim()) || "").replace(/^[#>*\-\s]+/, "").replace(/\s+/g, " ").trim();
+    const title = first.length > 70 ? first.slice(0, 70).replace(/\s+\S*$/, "") : first;
+    const curUnit = M.unit && M.unit !== "*" ? M.unit : "";
+    materialForm({ unit: curUnit, type: guessType(title + " " + text.slice(0, 400)), title, content: text }, "Add pasted text");
+  }
+  CC.addMaterialText = addText;
+  document.addEventListener("paste", (e) => {                   // Cmd/Ctrl+V anywhere on Materials (not inside a text box)
+    if (S.view !== "materials" || document.querySelector("#modal:not(.hidden)")) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    const cd = e.clipboardData;
+    if (!cd) return;
+    if (cd.files && cd.files.length) { e.preventDefault(); return addModal([...cd.files]); }
+    const text = cd.getData("text/plain");
+    if (text && text.trim()) { e.preventDefault(); addText(text); }
+  });
+
   // ================================================================== PLAYGROUND
   const TEMPLATES = {
     java: [
@@ -674,7 +702,7 @@
     if (!explain && !box.classList.contains("hidden")) { box.classList.add("hidden"); return; }
     box.classList.remove("hidden");
     box.innerHTML = "";
-    const q = h("textarea", { rows: 2, placeholder: "Ask about your code - e.g. why does this print 0? what does static mean here?" });
+    const q = h("textarea", { rows: 2, "data-enter-sends": "1", placeholder: "Ask about your code - e.g. why does this print 0? what does static mean here?" });
     const answer = h("div", { class: "ask-answer md" });
     const go = h("button", { class: "btn primary sm", html: icon("send") + "<span>Ask</span>" });
     const hintOnly = h("input", { type: "checkbox" }); hintOnly.checked = CC.local.get("pg_hints", true);

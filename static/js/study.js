@@ -233,7 +233,7 @@
     v.appendChild(h("div", { class: "pause-banner sync-banner hidden", id: "syncBanner" }));
 
     chat = h("div", { class: "chat", id: "chat", "data-sid": s.id });
-    const input = h("textarea", { id: "input", rows: 1, placeholder: "Message " + CC.coachName() + "...   Enter to send · Shift+Enter for a new line" });
+    const input = h("textarea", { id: "input", rows: 1, "data-enter-sends": "1", placeholder: "Message " + CC.coachName() + "...   Enter to send · Shift+Enter for a new line" });
     const sendBtn = h("button", { class: "btn primary icon", title: "Send", html: CC.icon("send") });
     const stopBtn = h("button", { class: "btn sm hidden", id: "stopBtn", html: CC.icon("stop") + " Stop" });
     const quick = h("div", { class: "quick-replies" }, QUICK.map((q) => h("button", { text: q, onclick: () => sendUser(q) })));
@@ -436,6 +436,8 @@
     opts.classList.add("done");
     [...opts.children].forEach((b) => { if (b.textContent.trim() === String(ans).trim()) b.classList.add("picked"); });
   }
+  const askVerdict = (ans) => h("div", { class: "verdict neutral" + (String(ans).length > 48 || /\n/.test(ans) ? " long" : ""),
+    html: '<span class="vd-ic">' + CC.icon("check") + "</span><span class=\"vd-text\">" + CC.esc(ans) + "</span>" });
   function askCard(it, resolve) {
     const d = h("div", { class: "tcard" + (resolve ? " live" : "") }, h("div", { class: "kind", html: CC.icon("help") + " Question" }));
     d.appendChild(MD.into(h("div", { class: "md" }), it.question));
@@ -443,20 +445,29 @@
     const done = (ans) => {
       if (!resolve) return;
       it.answer = ans; d.classList.remove("live");
-      d.querySelectorAll("button,input").forEach((x) => (x.disabled = true));
+      d.querySelectorAll("button,input,textarea").forEach((x) => (x.disabled = true));
+      const own = d.querySelector(".inline-row");
+      if (own) own.remove();                              // the answer shows once, in the pill below
       markAsk(opts, ans);
-      d.appendChild(h("div", { class: "verdict neutral", html: '<span class="vd-ic">' + CC.icon("check") + "</span>" + CC.esc(ans) }));
+      d.appendChild(askVerdict(ans));
       resolve({ answer: ans });
     };
     (it.choices || []).forEach((c) => opts.appendChild(h("button", { onclick: () => done(c) }, h("span", { text: c }))));
     d.appendChild(opts);
     if (it.allow_free_text !== false) {
-      const inp = h("input", { type: "text", placeholder: "Or type your own answer..." });
+      // grows with what you type (up to ~8 lines); Enter sends, Shift+Enter adds a line
+      const inp = h("textarea", { rows: 1, class: "own-answer", "data-enter-sends": "1", placeholder: "Or type your own answer...   Enter to send · Shift+Enter for a new line" });
+      const grow = () => { inp.style.height = "auto"; inp.style.height = Math.min(200, inp.scrollHeight + 2) + "px"; };
       const b = h("button", { class: "btn", text: "Send", onclick: () => inp.value.trim() && done(inp.value.trim()) });
-      inp.addEventListener("keydown", (e) => { if (e.key === "Enter") b.click(); });
+      inp.addEventListener("input", grow);
+      inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); b.click(); } });
       d.appendChild(h("div", { class: "inline-row" }, inp, b));
     }
-    if (it.answer !== undefined && !resolve) { d.querySelectorAll("button,input").forEach((x) => (x.disabled = true)); markAsk(opts, it.answer); d.appendChild(h("div", { class: "verdict neutral", html: '<span class="vd-ic">' + CC.icon("check") + "</span>" + CC.esc(it.answer) })); }
+    if (it.answer !== undefined && !resolve) {
+      d.querySelectorAll("button,input,textarea").forEach((x) => (x.disabled = true));
+      const own = d.querySelector(".inline-row"); if (own) own.remove();
+      markAsk(opts, it.answer); d.appendChild(askVerdict(it.answer));
+    }
     return d;
   }
 
@@ -473,7 +484,7 @@
   function drillCard(it, resolve) {
     const d = h("div", { class: "tcard" + (resolve ? " live" : "") }, h("div", { class: "kind", html: CC.icon("bolt") + " Drill · write one line from memory" }));
     d.appendChild(MD.into(h("div", { class: "md" }), it.prompt));
-    const inp = h("textarea", { rows: 1, placeholder: "Type the code, then Enter", spellcheck: "false" });
+    const inp = h("textarea", { rows: 1, "data-enter-sends": "1", placeholder: "Type the code, then Enter", spellcheck: "false" });
     const b = h("button", { class: "btn primary", text: "Check" });
     const reveal = h("button", { class: "btn ghost hidden", text: "Show answer" });
     const fb = h("div", { class: "small", style: { marginTop: "6px" } });
@@ -676,6 +687,9 @@
           source: { type: "string", description: "Where it comes from, e.g. 'Lesson: Constructors', 'PQ6 #2', 'blueprint'" },
           ways: { type: "string", description: "The ways it can be asked, ';'-separated, e.g. 'write the whole class; fix a broken one; trace output'" },
           status: { type: "string", enum: ["gap", "practicing", "solid"] } }, required: ["skill"] } } }, required: ["rows"] } } },
+    { type: "function", function: { name: "set_style_checks", description: "Turn on the style checks this course's grader enforces (only when its materials or blueprint show the rule, e.g. CS 124's Checkstyle). They then run as extra tests on every solution. Pass the full list; [] turns them off. Never for a general track.",
+      parameters: { type: "object", properties: { checks: { type: "array", items: { type: "string", enum: ["no-hidden-field", "no-param-assign"] },
+        description: "no-hidden-field: a parameter can't have a field's name (setX(int newX) { x = newX; }). no-param-assign: never assign to a parameter." } }, required: ["checks"] } } },
     { type: "function", function: { name: "update_review_notes", description: "Keep the student's review sheet for a topic current: the key ideas they'd reread before a quiz. Start with a **Terms** list (each key word with a one-line plain definition and where it appears in code), then 3-8 short bullets in plain words plus 1-2 small code examples in the course language. Replaces that topic's section, so include what's still true. Call after teaching a concept and when a problem shows something worth remembering.",
       parameters: { type: "object", properties: { topic: { type: "string", description: "Tracker topic name" }, markdown: { type: "string" } }, required: ["topic", "markdown"] } } },
     { type: "function", function: { name: "update_roadmap", description: "Replace the whole Roadmap note (title, units, - [ ] / - [x] topic checklists). Keep existing checkmarks.",
@@ -716,7 +730,7 @@
       const r = await Promise.race([p, waitFor(card)]);
       S.pending = null; clearHint();
       if (r.skipped && r.student_wrote === undefined) { card.classList.remove("live"); scheduleSave(); return r; }   // Stop pressed
-      if (r.student_wrote !== undefined) { it.answer = r.student_wrote; card.querySelectorAll("button,input").forEach((x) => (x.disabled = true)); card.classList.remove("live"); addItem({ kind: "you", text: r.student_wrote }, { save: false }); }
+      if (r.student_wrote !== undefined) { it.answer = r.student_wrote; card.querySelectorAll("button,input,textarea").forEach((x) => (x.disabled = true)); card.classList.remove("live"); addItem({ kind: "you", text: r.student_wrote }, { save: false }); }
       addItem(it, { render: false });
       noteAppend(quote("[!question] " + a.question + "\nAnswer: " + it.answer));
       scheduleSave();
@@ -751,9 +765,9 @@
       return r;
     },
     async give_problem(a) {
-      const ref = await CC.api("/api/run_tests", { language: L(), code: a.reference_solution || "", tests: a.test_code || "" });
+      const ref = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: L(), code: a.reference_solution || "", tests: a.test_code || "" });
       if (!ref.ok) return { error: "Problem rejected: your reference solution does not pass your tests (stage: " + ref.stage + ").\n" + (ref.message || "").slice(0, 3000) + "\nFix the reference or tests and call give_problem again." };
-      const st = await CC.api("/api/run_tests", { language: L(), code: a.starter_code || "", tests: a.test_code || "" });
+      const st = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: L(), code: a.starter_code || "", tests: a.test_code || "" });
       if (st.ok) return { error: "Problem rejected: the starter code already passes every test. The starter must be incomplete (or, for R4, contain a bug a test catches)." };
       const loose = await looseTests(a.wrong_solutions, a.test_code);
       if (loose) return loose;
@@ -847,6 +861,12 @@
       addItem({ kind: "sys", icon: "flag", text: "Next assessment · " + a.text });
       return { saved: true, date: r.date || "(no date found - include YYYY-MM-DD)" };
     },
+    async set_style_checks(a) {
+      const r = await CC.api("/api/course/style", { folder: S.session.course.folder, checks: a.checks || [] });
+      if (r.error) return { error: r.error };
+      addItem({ kind: "sys", icon: "check", text: "Style checks · " + (r.checks.join(", ") || "off") });
+      return r;
+    },
     async update_coverage(a) {
       const r = await CC.api("/api/note/coverage", { folder: S.session.course.folder, assessment: a.assessment || "", rows: a.rows || [] });
       if (r.error) return { error: r.error };
@@ -861,7 +881,7 @@
   async function looseTests(wrongs, tests) {
     for (const w of (wrongs || []).slice(0, 3)) {
       if (!w || !w.code) continue;
-      const r = await CC.api("/api/run_tests", { language: L(), code: w.code, tests: tests || "" });
+      const r = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: L(), code: w.code, tests: tests || "" });
       if (r.ok) return { error: "Problem rejected: your tests let this wrong solution pass (" + (w.why || "near-miss") + "). Add a test that catches it - for a signature or access word use tMethod/tField/tCtor/tClass - and call give_problem again.\nWrong solution that passed:\n" + String(w.code).slice(0, 1500) };
     }
     return null;
@@ -1389,7 +1409,7 @@
     saveCodeSoon();
     const rb = $("runBtn"); rb.disabled = true;
     const o = $("pOutput"); o.classList.remove("hidden"); o.innerHTML = '<div class="out-head"><span class="dots"><span></span><span></span><span></span></span><span class="muted small">Running tests...</span></div>';
-    const r = await CC.api("/api/run_tests", { language: L(), code: p.code, tests: p.tests });
+    const r = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: L(), code: p.code, tests: p.tests });
     rb.disabled = false;
     if (r.error) { CC.toast(r.error, true); showOutput(p.lastResult); return null; }
     p.runs++; p.lastResult = r;

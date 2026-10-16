@@ -949,3 +949,6 @@ div.CodeMirror span.CodeMirror-nonmatchingbracket { color: var(--bad) !important
 .cov-card .bar { margin: 2px 0 10px; }
 .cov-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .rv-row.cov .t { font-weight: 600; }
+.verdict.long { display: flex; flex-wrap: nowrap; align-items: flex-start; border-radius: 12px; padding: 7px 12px 7px 7px; max-width: 100%; font-family: var(--sans, inherit); font-weight: 550; line-height: 1.45; }
+.verdict .vd-text { flex: 1; min-width: 0; padding-top: 1px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.inline-row textarea.own-answer { resize: none; overflow-y: auto; min-height: 36px; line-height: 1.45; padding: 8px 10px; font-family: inherit; font-size: 14px; }

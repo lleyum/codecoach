@@ -57,21 +57,21 @@
   }
   function bus(vol) { const g = ctx.createGain(); g.gain.value = vol; g.connect(master); return g; }
 
-  // ---- keyboard profiles (k = "key" | "space" | "enter" | "back")
+  // ---- keyboard profiles (k = "key" | "space" | "enter" (sends) | "newline" (a new line in code or text) | "back")
   const KEYS = {
     creamy: { label: "Creamy (soft, muted thock)", play(t, k, out) {
-      const low = k === "space" || k === "enter" ? 0.78 : 1;
+      const low = k === "space" || k === "enter" || k === "newline" ? 0.78 : 1;
       noiseHit(t, { type: "lowpass", freq: 1500 * low * rand(0.92, 1.08), q: 0.7, gain: 0.5, decay: 0.045, out });
       tone(t, { freq: 190 * low * rand(0.95, 1.05), to: 120, gain: 0.35, decay: 0.05, out });
     } },
     clacky: { label: "Clacky (crisp, bright clicks)", play(t, k, out) {
-      const low = k === "space" || k === "enter" ? 0.7 : 1;
+      const low = k === "space" || k === "enter" || k === "newline" ? 0.7 : 1;
       noiseHit(t, { type: "bandpass", freq: 3800 * low * rand(0.9, 1.1), q: 1.4, gain: 0.55, decay: 0.028, out });
       tone(t, { freq: 1900 * low * rand(0.95, 1.05), type: "triangle", gain: 0.06, decay: 0.015, out });
       noiseHit(t + 0.012, { type: "highpass", freq: 5000, q: 0.7, gain: 0.18, decay: 0.012, out });
     } },
     thocky: { label: "Thocky (deep, heavy)", play(t, k, out) {
-      const low = k === "space" || k === "enter" ? 0.75 : 1;
+      const low = k === "space" || k === "enter" || k === "newline" ? 0.75 : 1;
       noiseHit(t, { type: "lowpass", freq: 900 * low * rand(0.9, 1.1), q: 1.2, gain: 0.55, decay: 0.06, out });
       tone(t, { freq: 140 * low * rand(0.95, 1.05), to: 85, gain: 0.45, decay: 0.07, out });
     } },
@@ -81,7 +81,7 @@
       if (k === "enter") tone(t + 0.04, { freq: 1760, gain: 0.18, decay: 0.7, out });
     } },
     bubble: { label: "Bubble (soft pops)", play(t, k, out) {
-      const f = (k === "space" || k === "enter" ? 520 : 760) * rand(0.9, 1.15);
+      const f = (k === "space" || k === "enter" || k === "newline" ? 520 : 760) * rand(0.9, 1.15);
       tone(t, { freq: f, to: f * 0.6, gain: 0.22, attack: 0.003, decay: 0.06, out });
     } },
   };
@@ -146,7 +146,8 @@
     const k = e.key;
     let kind = null;
     if (k.length === 1) kind = k === " " ? "space" : "key";
-    else if (k === "Enter") kind = "enter";
+    // the Enter sound (the typewriter's bell) is for sending; a new line in the editor or a text box is a plain key
+    else if (k === "Enter") kind = !e.shiftKey && (el.tagName === "INPUT" || el.dataset.enterSends) ? "enter" : "newline";
     else if (k === "Backspace" || k === "Delete") kind = "back";
     else if (k === "Tab") kind = "space";
     if (!kind) return;

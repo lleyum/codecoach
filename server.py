@@ -39,7 +39,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "3.6.0"
+VERSION = "3.6.1"
 # The app's outer layer: bundled Python, Mac window, Windows launcher. Raise this only when CodeCoach's code needs a change
 # there; in-place updates that need a newer outer layer ask for a full download instead.
 SHELL_VERSION = 1
@@ -2278,6 +2278,127 @@ def run_tests(lang, code, tests):
         shutil.rmtree(d, ignore_errors=True)
 
 
+# ---------------------------------------------------------------- course style checks
+# Some classes run a style checker (CS 124 uses Checkstyle) that rejects code plain Java accepts. A course turns
+# the matching checks on in its profile ("- **Style checks:** no-hidden-field"); then they run as extra tests on
+# every solution, the coach's reference included. Off by default: `this.x = x` is ordinary Java.
+
+STYLE_CHECKS = {
+    "no-hidden-field": ("java", "parameters named differently from fields",
+                        "a parameter may not have the same name as a field (setX(int newX) { x = newX; }, not setX(int x) { this.x = x; })"),
+    "no-param-assign": ("java", "parameters aren't reassigned",
+                        "never assign to a parameter (str = str.trim() is not allowed: copy it into a new local variable)"),
+}
+
+
+def _java_clean(code):
+    src = re.sub(r"//[^\n]*|/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), code or "", flags=re.S)
+    return re.sub(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'', lambda m: '"' + " " * (len(m.group(0)) - 2) + '"', src)
+
+
+def _java_members(src, level):
+    """Fields and methods declared at brace depth `level` (1 = inside a top-level class, 0 = a bare class body).
+    Returns (fields, methods) with methods as (name, [param names], body)."""
+    fields, methods, depth, stmt, i = [], [], 0, "", 0
+    while i < len(src):
+        ch = src[i]
+        if ch == "{":
+            if depth == level:
+                head = stmt.strip()
+                m = re.search(r"([A-Za-z_]\w*)\s*\(([^()]*)\)\s*(?:throws\s+[\w.,\s]+)?$", head)
+                j, d = i + 1, 1                                  # the body: up to the matching brace
+                while j < len(src) and d:
+                    d += {"{": 1, "}": -1}.get(src[j], 0)
+                    j += 1
+                if m and not re.match(r"(if|for|while|switch|catch|synchronized)$", m.group(1)):
+                    inside = re.sub(r"<[^<>]*>", "", re.sub(r"<[^<>]*>", "", m.group(2)))
+                    params = [re.findall(r"[A-Za-z_]\w*", p)[-1] for p in inside.split(",") if re.findall(r"[A-Za-z_]\w*", p)]
+                    methods.append((m.group(1), params, src[i + 1:j - 1]))
+                    stmt, i = "", j
+                    continue
+                if re.search(r"=\s*$", head) or re.search(r"\bnew\b[^;]*$", head):   # an array/anonymous initializer
+                    stmt += src[i:j]
+                    i = j
+                    continue
+                stmt = ""
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            stmt = ""
+        elif ch == ";" and depth == level:
+            decl = re.sub(r"=.*", "", stmt, flags=re.S).strip()
+            if decl and "(" not in decl and not re.match(r"(return|import|package)\b", decl):
+                for part in re.sub(r"<[^<>]*>", "", decl).split(","):
+                    w = re.findall(r"[A-Za-z_]\w*", part)
+                    if w:
+                        fields.append(w[-1])
+            stmt = ""
+        elif depth == level:
+            stmt += ch
+        i += 1
+    return fields, methods
+
+
+def style_problems(lang, code, checks):
+    """[(label, problem or None)] for each enabled check that applies to this language."""
+    on = [c for c in checks or [] if c in STYLE_CHECKS and STYLE_CHECKS[c][0] == norm_lang(lang)]
+    if not on:
+        return []
+    src = _java_clean(code)
+    fields, methods = _java_members(src, 1 if java_top_classes(code) else 0)
+    out = []
+    for c in on:
+        bad = []
+        for name, params, body in methods:
+            if c == "no-hidden-field":
+                bad += ["`%s(... %s ...)`: the parameter `%s` has the same name as a field - rename it (e.g. `new%s`) and write `%s = new%s;`" %
+                        (name, p, p, p[:1].upper() + p[1:], p, p[:1].upper() + p[1:]) for p in params if p in fields]
+            else:
+                bad += ["`%s`: assigns to the parameter `%s` - copy it into a new local variable instead" % (name, p) for p in params
+                        if re.search(r"(?<![\w.])%s\s*(?:[-+*/%%&|^]?=(?!=)|\+\+|--)|(?:\+\+|--)\s*%s\b" % (re.escape(p), re.escape(p)), body)]
+        out.append(("style: " + STYLE_CHECKS[c][1], "; ".join(bad[:3]) or None))
+    return out
+
+
+def add_style(result, lang, code, checks):
+    """Fold the course's style checks into a test result, as extra tests (only when the code compiled and ran)."""
+    if result.get("stage") != "run":
+        return result
+    probs = style_problems(lang, code, checks)
+    if not probs:
+        return result
+    lines = ["PASS  " + label if p is None else "FAIL  " + label + "  ->  " + p for label, p in probs]
+    good = sum(1 for _, p in probs if p is None)
+    result = dict(result, passed=result["passed"] + good, total=result["total"] + len(probs),
+                  message=(result.get("message", "") + "\n" + "\n".join(lines)).strip())
+    result["ok"] = (not result.get("timed_out")) and result["total"] > 0 and result["passed"] == result["total"]
+    return result
+
+
+STYLE_RE = re.compile(r"^([ \t]*[-*]?[ \t]*\*\*Style checks:\*\*[ \t]*)(.*)$", re.M)
+
+
+def course_style(folder):
+    m = STYLE_RE.search(read_text(os.path.join(folder, "_course.md"))) if folder else None
+    if not m:
+        return []
+    value = re.split(r"\s+-\s+|\(", m.group(2))[0]          # "(none) - only if..." / "no-hidden-field - CS 124 Checkstyle"
+    return [c for c in re.findall(r"[a-z][a-z-]+", value.lower()) if c in STYLE_CHECKS]
+
+
+def set_course_style(folder, checks):
+    on = [c for c in checks or [] if c in STYLE_CHECKS]
+    path = os.path.join(folder, "_course.md")
+    body = read_text(path)
+    line = ", ".join(on) or "(none) - only if your class's grader enforces them: no-hidden-field (a parameter can't share a field's name), no-param-assign (never reassign a parameter)"
+    if STYLE_RE.search(body):
+        body = STYLE_RE.sub(lambda m: m.group(1) + line, body, count=1)
+    else:
+        body = body.rstrip() + "\n- **Style checks:** " + line + "\n"
+    write_text(path, body)
+    return {"checks": on}
+
+
 def run_snippet(lang, code, stdin=""):
     lang = norm_lang(lang)
     if not which_tool(lang):
@@ -2463,6 +2584,10 @@ def build_system_prompt(cfg, folder, mode, topic, stats=None):
     ctx = ["# THE COURSE (snapshot of the student's notes at session start; your tool results show later changes)",
            "Course folder: " + folder,
            "Course type: %s. Language: %s." % (meta["type"], LANGS[meta["language"]]["label"]),
+           ("STYLE CHECKS ON for this course (the app runs them as extra tests on every solution, including your reference and examples, "
+            "so write all code this way): " + "; ".join(STYLE_CHECKS[c][2] for c in course_style(folder))) if course_style(folder) else
+           "Style checks: none for this course - use the language's ordinary style (e.g. Java `this.x = x;` in constructors and setters is normal), "
+           "unless the course's materials show a grader rule; then turn the matching check on with set_style_checks.",
            "Today: %s (%s)" % (today(), dt.date.today().strftime("%A")),
            "Session type: %s%s" % (mode or "learn", ("; topic: " + topic) if topic else "")]
     terms = topic_terms(topic)
@@ -3493,7 +3618,11 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Timer(0.3, lambda: os._exit(0)).start()
                 return
             if p == "/api/run_tests":
-                return self.send_json(run_tests(b.get("language"), b.get("code", ""), b.get("tests", "")))
+                r = run_tests(b.get("language"), b.get("code", ""), b.get("tests", ""))
+                folder = b.get("folder")
+                if folder:
+                    r = add_style(r, b.get("language"), b.get("code", ""), course_style(self.check_course(folder, cfg)))
+                return self.send_json(r)
             if p == "/api/run_snippet":
                 return self.send_json(run_snippet(b.get("language"), b.get("code", ""), b.get("stdin", "")))
             if p == "/api/changed_lines":
@@ -3723,6 +3852,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not path:
                     return self.send_json({"error": "This course has no %s note." % kind})
                 return self.send_json({"note": os.path.basename(path), "text": read_text(path, 30000)})
+            if p == "/api/course/style":
+                return self.send_json(set_course_style(folder, b.get("checks") or []))
             if p == "/api/course/assessment":
                 return self.send_json(set_next_assessment(folder, b.get("text") or ""))
             if p == "/api/note/coverage":

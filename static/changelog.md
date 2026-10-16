@@ -1,5 +1,12 @@
 # What's new in CodeCoach
 
+## 3.6.1
+
+- **Your class's style rules, checked.** Some classes' graders reject code that's fine in plain Java (CS 124's Checkstyle fails `setAge(int age) { this.age = age; }`: the parameter can't share the field's name). Turn on a course's **Style checks** and every solution is checked for them as extra tests, your coach's own examples included. Off unless your class needs them; general tracks use ordinary style.
+- **Paste text into Materials.** Copy text from a lesson page, a PDF or a doc and press Cmd+V (Ctrl+V) on the Materials page, or drag the text onto it. The Add form opens with the text filled in and a title and type guessed.
+- **Long answers fit.** Your own answer to a coach's question now grows as you type (Shift+Enter for a new line) and wraps neatly after you send it.
+- **Enter sounds right.** The Enter sound (the typewriter bell) only plays when Enter sends something. A new line in the code editor sounds like a normal key.
+
 ## 3.6.0
 
 - **Practice that looks like your quiz.** For classes, your coach now takes topics from the whole unit and question styles from the practice quiz and past quizzes. Each skill gets asked at least two ways (one the practice quiz doesn't use), and it only goes deeper once you can do the quiz-style version.

@@ -146,14 +146,14 @@
     for (let i = 0; i < probs.length; i++) {
       const p = probs[i];
       status("Checking coding problem " + (i + 1) + " of " + probs.length + "...");
-      const ref = await CC.api("/api/run_tests", { language: lang, code: p.reference_solution || "", tests: p.test_code || "" });
+      const ref = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: lang, code: p.reference_solution || "", tests: p.test_code || "" });
       if (!ref.ok) { errors.push("problem " + (i + 1) + " (" + p.name + "): the reference solution fails its tests (" + (ref.stage || "") + "): " + String(ref.message || ref.error || "").slice(0, 1500)); continue; }
-      const st = await CC.api("/api/run_tests", { language: lang, code: p.starter_code || "", tests: p.test_code || "" });
+      const st = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: lang, code: p.starter_code || "", tests: p.test_code || "" });
       if (st.ok) { errors.push("problem " + (i + 1) + " (" + p.name + "): the starter code already passes every test"); continue; }
       let loose = null;
       for (const w of (p.wrong_solutions || []).slice(0, 3)) {
         if (!w || !w.code) continue;
-        const wr = await CC.api("/api/run_tests", { language: lang, code: w.code, tests: p.test_code || "" });
+        const wr = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: lang, code: w.code, tests: p.test_code || "" });
         if (wr.ok) { loose = w; break; }
       }
       if (loose) { errors.push("problem " + (i + 1) + " (" + p.name + "): the tests let a wrong solution pass (" + (loose.why || "near-miss") + ") - add a test that catches it"); continue; }
@@ -390,7 +390,7 @@
     btn.disabled = true;
     const o = $("examOut"); o.classList.remove("hidden");
     o.innerHTML = '<div class="out-head"><span class="dots"><span></span><span></span><span></span></span><span class="muted small">Running tests...</span></div>';
-    const r = await CC.api("/api/run_tests", { language: L(), code: ex.codes[p.id], tests: p.tests });
+    const r = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: L(), code: ex.codes[p.id], tests: p.tests });
     btn.disabled = false;
     o.innerHTML = "";
     if (r.error) { o.textContent = r.error; return; }
@@ -426,8 +426,8 @@
         } else {
           const p = it.p;
           setStatus("Running the tests for " + p.name + "...");
-          let r = await CC.api("/api/run_tests", { language: L(), code: ex.codes[p.id] || "", tests: p.tests });
-          if (r.error) r = await CC.api("/api/run_tests", { language: L(), code: ex.codes[p.id] || "", tests: p.tests });
+          let r = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: L(), code: ex.codes[p.id] || "", tests: p.tests });
+          if (r.error) r = await CC.api("/api/run_tests", { folder: CC.courseFolder(), language: L(), code: ex.codes[p.id] || "", tests: p.tests });
           if (r.error) {        // couldn't run the tests at all (not the student's fault): left out of the score
             res.push({ id: p.id, label: "P" + (++pn), kind: "code", name: p.name, topic: p.topic, points: p.points, earned: 0, ungraded: r.error,
               passed: 0, total: p.total || 0, stage: "error", fails: [], compileError: "", runs: ex.runs[p.id] || 0, ms: ex.timeOn[p.id] || 0 });

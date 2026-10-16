@@ -145,6 +145,8 @@ Three layers: the **problem** on top, **your code** in the middle, the **test ou
 
 Every problem is checked before you see it: the coach's own solution must pass its tests, the starting code must fail them, and for harder problems (R4-R6) a few near-miss wrong answers (a missing `public`, the wrong return type, an off-by-one) must fail too. So the tests are strict before you start, instead of being fixed halfway through.
 
+**Style checks (class courses only).** If your class's grader has style rules plain Java doesn't (CS 124's Checkstyle: a parameter can't share a field's name, so `setAge(int newAge) { age = newAge; }`, not `this.age = age`; and never reassign a parameter), your coach turns them on once it sees them in your materials, or you can set them in **Progress → Course profile** (`Style checks: no-hidden-field, no-param-assign`). They then run as extra tests on every solution. General tracks don't use them: `this.age = age;` is normal Java.
+
 **Java: whole classes.** When your class has you write `public class Scoreboard { ... }`, so do the problems: you write the whole class, and the tests create objects with `new`. Tests also check the exact signature the problem asks for and say what's off, e.g. `FAIL signature: public int getHome() -> found int getHome()`. If your code compiles but the tests can't call it (a missing `static`, different parameter types), the output says that in plain words.
 
 ### Practice exams
@@ -192,7 +194,7 @@ There's **one clock**, in the session bar at the top:
 
 Your class content, organized into **units** (e.g. "Week 6 - Lists"). Your coach reads it to teach exactly what your class tests.
 
-- **Add:** drop files anywhere on the page or click *browse* - PDF, Word, PowerPoint (with speaker notes), notebooks, HTML, code, text. Or **Add material** to paste text. Scanned PDFs (pictures of text) can't be read - paste those.
+- **Add:** drop files anywhere on the page or click *browse* - PDF, Word, PowerPoint (with speaker notes), notebooks, HTML, code, text. **Text works too:** copy it from a lesson page, PDF or doc and press ⌘V (Ctrl+V) on the Materials page, or drag it onto the page; the Add form opens with it filled in (title and type guessed - check them). Scanned PDFs (pictures of text) can't be read - paste those.
 - **Types:** lesson, slides, practice quiz, quiz feedback, homework, notes, code, other.
 - **Organize:** **New unit**; drag a material onto a unit to move it; rename or delete units from their header.
 - **Use:** click to read; hover for **Study this**, **Edit**, **Delete** (deleted items go to `materials/_trash`). Tick several and press **Study selected**.

@@ -95,6 +95,63 @@ class JavaClassesTest(unittest.TestCase):
         self.assertEqual(r["total"], 2)
 
 
+class StyleChecksTest(unittest.TestCase):
+    CHECKS = ["no-hidden-field", "no-param-assign"]
+
+    def problems(self, code):
+        return {label: p for label, p in server.style_problems("java", code, self.CHECKS)}
+
+    def test_course_rules_only_when_on(self):
+        hidden = "public class P {\n    private int age;\n    public P(int age) { this.age = age; }\n}"
+        self.assertEqual(server.style_problems("java", hidden, []), [])                     # ordinary Java: fine
+        self.assertEqual(server.style_problems("python", "def f(x):\n    x = 1", self.CHECKS), [])
+        p = self.problems(hidden)
+        self.assertIn("`age` has the same name as a field", p["style: parameters named differently from fields"])
+        self.assertIsNone(p["style: parameters aren't reassigned"])
+
+    def test_clean_code_passes(self):
+        good = ("public class P {\n    private String name;\n    private int age, height;\n    private int[] xs = {1, 2};\n"
+                "    // public void setName(String name) { this.name = name; }\n"
+                "    public P(String setName) { name = setName; }\n    public void setAge(int newAge) { this.age = newAge; }\n"
+                "    public String shout(String s) { String t = s.trim(); for (int i = 0; i < 3; i++) { t += \"!\"; } return t; }\n}")
+        self.assertEqual(set(self.problems(good).values()), {None})
+
+    def test_param_assign_and_bare_body(self):
+        p = self.problems("private int value;\nvoid setValue(int value) { this.value = value; }\nint up(int n) { n++; return n; }")
+        self.assertIn("`value` has the same name", p["style: parameters named differently from fields"])
+        self.assertIn("parameter `n`", p["style: parameters aren't reassigned"])
+
+    def test_profile_line(self):
+        d = tempfile.mkdtemp(prefix="cc-style-")
+        self.addCleanup(shutil.rmtree, d, True)
+        shutil.copy(os.path.join(os.path.dirname(HERE), "templates", "_course.md"), os.path.join(d, "_course.md"))
+        self.assertEqual(server.course_style(d), [])                                       # the template's hint isn't a setting
+        server.set_course_style(d, ["no-hidden-field", "made-up"])
+        self.assertEqual(server.course_style(d), ["no-hidden-field"])
+        server.set_course_style(d, [])
+        self.assertEqual(server.course_style(d), [])
+
+
+@unittest.skipUnless(shutil.which("javac"), "needs a JDK")
+class StyleChecksAppTest(unittest.TestCase):
+    def test_only_the_course_with_the_rule_fails(self):
+        code = SCOREBOARD.replace("public Scoreboard(int home, int away)", "public Scoreboard(int setHome, int setAway)").replace(
+            "this.home = home;", "home = setHome;").replace("this.away = away;", "away = setAway;").replace(
+            "public int addHome(int points) {", "public void setHome(int home) {\n        this.home = home;\n    }\n    public int addHome(int points) {")
+        with App() as app:
+            cs = app.api("/api/course/create", {"language": "java", "type": "class", "name": "CS 124"})["folder"]
+            general = app.api("/api/course/create", {"language": "java", "type": "general", "name": "Java track"})["folder"]
+            app.api("/api/course/style", {"folder": cs, "checks": ["no-hidden-field", "no-param-assign"]})
+            r = app.api("/api/run_tests", {"folder": general, "language": "java", "code": code, "tests": SPEC_TESTS}, timeout=120)
+            self.assertEqual((r["ok"], r["total"]), (True, 7), r)
+            r = app.api("/api/run_tests", {"folder": cs, "language": "java", "code": code, "tests": SPEC_TESTS}, timeout=120)
+            self.assertEqual((r["ok"], r["passed"], r["total"]), (False, 8, 9), r)
+            self.assertIn("`home` has the same name as a field", r["message"])
+            q = urllib.parse.quote
+            self.assertIn("STYLE CHECKS ON", app.api("/api/system_prompt?mode=learn&folder=" + q(cs, safe=""))["prompt"])
+            self.assertIn("`this.x = x;` in constructors and setters is normal", app.api("/api/system_prompt?mode=learn&folder=" + q(general, safe=""))["prompt"])
+
+
 class CoverageTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp(prefix="cc-cov-")

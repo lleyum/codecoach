@@ -222,6 +222,7 @@
   // ------------------------------------------------------------------ app state & navigation
   CC.lang = (k) => (S.state && S.state.languages[k]) || { label: k, tests: false, available: false };
   CC.course = () => S.course;
+  CC.courseFolder = () => ((S.session && S.session.course) || S.course || {}).folder || "";     // tests run with the course's style checks
   CC.coachName = () => ((S.state && S.state.config && S.state.config.coach_name) || "Coach").trim() || "Coach";
   CC.coachAvatar = () => { const n = CC.coachName(); return n.toLowerCase() === "coach" ? CC.icon("logo") : "<b>" + MD.esc(n.charAt(0).toUpperCase()) + "</b>"; };
 

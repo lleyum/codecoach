@@ -200,6 +200,68 @@ class SessionTest(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_paste_text_into_materials_long_answers_and_enter_sounds(self):
+        with App() as app, sync_playwright() as p:
+            f = app.make_course("java", "Java track")
+            long_answer = "I want constructors and the setter that watches for change, since I keep missing the parameter naming rule and overloaded constructors too"
+            app.llm.reply("", tools=[("ask", {"question": "What should we work on?", "choices": ["Constructors", "Static"]})])
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            try:
+                page.goto(app.base + "/")
+                page.evaluate("localStorage.setItem('cc_seenVersion', JSON.stringify('9.9.9'))")
+                page.reload()
+                # Materials: paste text (Cmd/Ctrl+V on the page) -> the add form, filled in
+                page.click("#nav button[data-view=materials]")
+                page.wait_for_selector("#view-materials .drop >> text=Drop files or text here")
+                page.evaluate("""() => { const dt = new DataTransfer(); dt.setData('text/plain', '# Lesson - Inheritance\\n\\nA subclass extends a superclass.');
+                                         document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true })); }""")
+                page.wait_for_selector("#modal >> text=Add pasted text", timeout=5000)
+                self.assertEqual(page.input_value("#modal input[type=text]"), "Lesson - Inheritance")
+                self.assertEqual(page.input_value("#modal select"), "lesson")
+                self.assertIn("A subclass extends", page.input_value("#modal textarea"))
+                page.click("#modal .modal-foot >> text=Save")
+                page.wait_for_selector("#view-materials >> text=Lesson - Inheritance", timeout=5000)
+                # text dragged onto the page works the same way
+                page.evaluate("""() => { const dt = new DataTransfer(); dt.setData('text/plain', 'Practice Quiz 7\\n1. What does super() do?');
+                                         document.getElementById('view-materials').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); }""")
+                page.wait_for_selector("#modal >> text=Add pasted text", timeout=5000)
+                self.assertEqual(page.input_value("#modal select"), "practice-quiz")
+                page.click("#modal .modal-foot >> text=Cancel")
+                # a long typed answer wraps inside its box, before and after Enter
+                page.click("#nav button[data-view=study]")
+                page.click("#view-study >> text=Start session")
+                page.wait_for_selector(".tcard.live textarea.own-answer", timeout=20000)
+                page.fill(".tcard.live textarea.own-answer", long_answer)
+                box = page.eval_on_selector(".tcard.live textarea.own-answer", "e => [e.scrollWidth, e.clientWidth, e.offsetHeight]")
+                self.assertLessEqual(box[0], box[1] + 1)
+                self.assertGreater(box[2], 40)                                     # grew to show every line
+                page.press(".tcard.live textarea.own-answer", "Enter")
+                page.wait_for_selector(".tcard .verdict.long", timeout=5000)
+                fits = page.eval_on_selector(".tcard .verdict.long", "v => { const c = v.closest('.tcard').getBoundingClientRect(), r = v.getBoundingClientRect(), t = v.querySelector('.vd-text'); return r.right <= c.right && t.scrollWidth <= t.clientWidth + 1; }")
+                self.assertTrue(fits)
+                self.assertEqual(page.locator(".tcard textarea.own-answer").count(), 0)
+                # Enter: the "send" key sound only where Enter sends; a new line in code is a plain key
+                page.evaluate("window._keys = []; CC.sfx.key = (kind, scope) => { window._keys.push(kind + ':' + scope); }; 0")
+                page.evaluate("""() => { const ta = document.createElement('textarea'); ta.id = 'codeLike'; document.body.appendChild(ta); }""")
+                page.focus("#codeLike"); page.keyboard.press("Enter")
+                page.wait_for_timeout(40)
+                page.focus("#input"); page.keyboard.press("Shift+Enter")
+                page.wait_for_timeout(40)
+                page.keyboard.type("hi"); page.wait_for_timeout(40); page.keyboard.press("Enter")
+                kinds = page.evaluate("window._keys")
+                self.assertEqual(kinds[0], "newline:text")
+                self.assertEqual(kinds[1], "newline:text")
+                self.assertEqual(kinds[-1], "enter:text")
+                self.assertEqual(errors, [])
+            except Exception:
+                page.screenshot(path=os.path.join(os.environ.get("E2E_SHOTS", app.home), "e2e-failure.png"))
+                raise
+            finally:
+                browser.close()
+
     def test_quick_review(self):
         with App() as app, sync_playwright() as p:
             app.make_course("python", "Python track")
